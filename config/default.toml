@@ -91,3 +91,21 @@ discord = true
 
 [paths]
 cache_dir = "~/.cache/chromia"
+
+[appearance]
+glass         = false
+glass_opacity = 0.82
+blur          = 24
+noise         = true
+glass_mode    = "light"      # light | strong | disabled
+border_radius = 14
+animations    = true
+edit_mode     = false
+follow_wallpaper = false
+glass_background = "dynamic" # dynamic | solid | wallpaper
+
+[layout.right_panel]
+slots = ["AlbumArt", "Player", "Lyrics", "Queue"]
+
+[layout.bottom_player]
+preset = "default"

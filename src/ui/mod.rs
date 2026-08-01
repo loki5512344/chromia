@@ -1,6 +1,11 @@
 //! GTK user interface: main window, onboarding, columns and widgets.
 
+pub mod bottom_player;
+pub mod center;
+pub mod layout;
 pub mod onboarding;
+pub mod right_panel;
+pub mod sidebar;
 pub mod widgets;
 pub mod window;
 

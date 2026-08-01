@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn full_css_includes_the_base_stylesheet() {
         let css = full_css(&sample_palette());
-        assert!(css.contains("@theme_bg_color"), "base.css marker missing");
+        assert!(css.contains(".chromia-shell"), "base.css marker missing");
         assert!(css.starts_with(load_base_css()));
     }
 

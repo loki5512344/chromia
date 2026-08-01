@@ -1,5 +1,16 @@
-//! Main application window: a single-screen player layout with a player bar,
-//! resizable columns (library / lyrics / queue) and an optional equalizer.
+//! Main application window: a three-panel layout
+//! (`Sidebar | Center | RightPanel`) with a persistent `BottomPlayer`.
+//!
+//! Architecture mirrors the spec in `CHROMIA.md`:
+//!
+//! ```text
+//! ┌─────────────┬───────────────────────────────┬──────────────────┐
+//! │  Sidebar    │  Center (pages)                │  Right Panel     │
+//! │  (fixed)    │  (fixed)                       │  (customisable)  │
+//! ├─────────────┴───────────────────────────────┴──────────────────┤
+//! │  Bottom Player (preset-driven)                                  │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -19,19 +30,21 @@ use crate::library::database::Database;
 use crate::theme::css;
 use crate::theme::{Palette, palette_for, palette_from_image};
 use crate::ui::UiContext;
+use crate::ui::bottom_player::BottomPlayer;
+use crate::ui::center::Center;
+use crate::ui::right_panel::RightPanel;
+use crate::ui::sidebar::Sidebar;
 use crate::ui::widgets::equalizer::EqualizerWidget;
-use crate::ui::widgets::library::Library;
-use crate::ui::widgets::lyrics::Lyrics;
-use crate::ui::widgets::player::PlayerCore;
-use crate::ui::widgets::queue::Queue as QueueWidget;
 
-/// The main window tying together the player bar, columns and event loop.
+/// The main window tying together the sidebar, center, right panel, bottom
+/// player and the event pump.
 pub struct ChromiaWindow {
     app_window: adw::ApplicationWindow,
-    player: PlayerCore,
-    library: Library,
-    lyrics: Lyrics,
-    queue: QueueWidget,
+    #[allow(dead_code)] // currently read for setup only; future page swaps
+    sidebar: Sidebar,
+    center: Rc<Center>,
+    right_panel: RightPanel,
+    bottom_player: BottomPlayer,
     equalizer: EqualizerWidget,
     event_rx: Rc<RefCell<mpsc::Receiver<PlayerEvent>>>,
     scan_rx: Rc<RefCell<mpsc::Receiver<Vec<Track>>>>,
@@ -42,19 +55,46 @@ pub struct ChromiaWindow {
 }
 
 impl ChromiaWindow {
-    /// Builds the window, its columns, the initial theme and the event pump.
+    /// Builds the window, its panels, the initial theme and the event pump.
     pub fn new(
         app: &adw::Application,
         ctx: &UiContext,
         scan_rx: mpsc::Receiver<Vec<Track>>,
     ) -> Rc<Self> {
-        let player = PlayerCore::new(ctx);
-        let library = Library::new(ctx);
-        let lyrics = Lyrics::new(ctx);
-        let queue = QueueWidget::new(ctx);
+        let sidebar = Sidebar::new(ctx);
+        let center = Rc::new(Center::new(ctx));
+        let right_panel = RightPanel::new(ctx);
+        let bottom_player = BottomPlayer::new(ctx);
         let equalizer = EqualizerWidget::new(ctx);
 
-        let middle = build_columns(&library, &lyrics, &queue);
+        // Wire sidebar → center page header. The actual page contents still
+        // live in the Center widget; swapping them is a v1.0 milestone.
+        {
+            let center_weak = Rc::downgrade(&center);
+            sidebar.connect_page_changed(move |page| {
+                if let Some(center) = center_weak.upgrade() {
+                    center.set_page(page);
+                }
+            });
+        }
+
+        let body_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        body_paned.set_start_child(Some(&sidebar.root()));
+        body_paned.set_position(220);
+        body_paned.set_resize_start_child(false);
+        body_paned.set_shrink_start_child(false);
+
+        let center_right = gtk::Paned::new(gtk::Orientation::Horizontal);
+        center_right.set_start_child(Some(&center.root()));
+        center_right.set_end_child(Some(&right_panel.root()));
+        center_right.set_position(560);
+        center_right.set_hexpand(true);
+        center_right.set_vexpand(true);
+        center_right.set_resize_end_child(false);
+        center_right.set_shrink_end_child(false);
+        body_paned.set_end_child(Some(&center_right));
+        body_paned.set_hexpand(true);
+        body_paned.set_vexpand(true);
 
         let show_equalizer = ctx
             .config
@@ -64,16 +104,25 @@ impl ChromiaWindow {
             .iter()
             .any(|w| w.id == "Equalizer" && w.visible);
 
+        let body_wrapper = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .css_classes(vec!["chromia-body"])
+            .build();
+        body_wrapper.append(&body_paned);
+        if show_equalizer {
+            body_wrapper.append(&equalizer.root());
+        }
+
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .hexpand(true)
             .vexpand(true)
+            .css_classes(vec!["chromia-shell"])
             .build();
-        root.append(&player.root());
-        root.append(&middle);
-        if show_equalizer {
-            root.append(&equalizer.root());
-        }
+        root.append(&body_wrapper);
+        root.append(&bottom_player.root());
 
         let palette = resolve_initial_palette(&ctx.config.borrow().theme);
         let palette = Rc::new(RefCell::new(palette));
@@ -88,17 +137,17 @@ impl ChromiaWindow {
         let app_window = adw::ApplicationWindow::builder()
             .application(app)
             .title("Chromia")
-            .default_width(1200)
-            .default_height(800)
+            .default_width(1280)
+            .default_height(820)
             .content(&root)
             .build();
 
         let window = Rc::new(Self {
             app_window,
-            player,
-            library,
-            lyrics,
-            queue,
+            sidebar,
+            center,
+            right_panel,
+            bottom_player,
             equalizer,
             event_rx: ctx.event_rx.clone(),
             scan_rx: Rc::new(RefCell::new(scan_rx)),
@@ -121,8 +170,8 @@ impl ChromiaWindow {
         self.app_window.present();
     }
 
-    /// Drains playback and library-scan events off their shared receivers on the
-    /// GTK main loop.
+    /// Drains playback and library-scan events off their shared receivers on
+    /// the GTK main loop.
     fn start_event_pump(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         glib::timeout_add_local(Duration::from_millis(50), move || {
@@ -143,11 +192,11 @@ impl ChromiaWindow {
         }
     }
 
-    /// Consumes completed library scans and refreshes the library widget.
+    /// Consumes completed library scans and refreshes the center panel.
     fn pump_scans(&self) {
         let mut receiver = self.scan_rx.borrow_mut();
         while let Ok(tracks) = receiver.try_recv() {
-            self.library.load_tracks(tracks);
+            self.center.load_tracks(tracks);
         }
     }
 
@@ -156,10 +205,10 @@ impl ChromiaWindow {
         if let PlayerEvent::Error(message) = &event {
             tracing::warn!(error = %message, "playback error");
         }
-        self.player.update(&event);
-        self.library.update(&event);
-        self.lyrics.update(&event);
-        self.queue.update(&event);
+        self.sidebar.update(&event);
+        self.center.update(&event);
+        self.right_panel.update(&event);
+        self.bottom_player.update(&event);
         self.equalizer.update(&event);
         if let PlayerEvent::TrackStarted(track) = &event {
             self.refresh_dynamic_theme(track);
@@ -174,9 +223,9 @@ impl ChromiaWindow {
         }
     }
 
-    /// Re-extracts the palette from the current track's cover when the theme is
-    /// in `dynamic` mode. Local tracks use embedded art; remote tracks download
-    /// and cache their cover via `sources::download_thumbnail`.
+    /// Re-extracts the palette from the current track's cover when the theme
+    /// is in `dynamic` mode. Local tracks use embedded art; remote tracks
+    /// download and cache their cover via `sources::download_thumbnail`.
     fn refresh_dynamic_theme(&self, track: &Track) {
         if !matches!(self.config.borrow().theme.mode, ThemeMode::Dynamic) {
             return;
@@ -222,22 +271,6 @@ impl ChromiaWindow {
             }
         });
     }
-}
-
-/// Builds the resizable three-column body: library | lyrics | queue.
-fn build_columns(library: &Library, lyrics: &Lyrics, queue: &QueueWidget) -> gtk::Paned {
-    let queue_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    queue_paned.set_start_child(Some(&lyrics.root()));
-    queue_paned.set_end_child(Some(&queue.root()));
-    queue_paned.set_position(480);
-
-    let main_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    main_paned.set_start_child(Some(&library.root()));
-    main_paned.set_end_child(Some(&queue_paned));
-    main_paned.set_position(320);
-    main_paned.set_hexpand(true);
-    main_paned.set_vexpand(true);
-    main_paned
 }
 
 /// Resolves the palette shown before any track starts playing.

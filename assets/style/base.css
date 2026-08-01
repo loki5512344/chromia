@@ -1,19 +1,44 @@
-/* Chromia base stylesheet — palette-independent rules.
-   The dynamic palette block is appended by theme::css::generate_css. */
+/* ═══════════════════════════════════════════════════════════════════════
+   Chromia — base stylesheet (palette-independent rules).
 
+   The dynamic palette block is appended by `theme::css::generate_css`.
+   This file owns:
+     · the shell layout (sidebar / center / right panel / bottom player)
+     · the modern Catppuccin Mocha look (radii, shadows, spacing)
+     · Glass UI foundation (translucent surfaces, blur, noise)
+     · hover / active / focus animations
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─── Global reset / typography ─────────────────────────────────────────── */
 window {
-    background-color: @theme_bg_color;
-    color: @theme_text_color;
+    background-color: @background;
+    color: @text;
+    font-family: "Inter", "Cantarell", "SF Pro Text", "Segoe UI", sans-serif;
+    font-feature-settings: "ss01", "cv01", "cv02";
 }
 
+/* Smooth color transitions for dynamic theme switches. */
+window,
+.chromia-shell,
+.chromia-sidebar,
+.chromia-bottom-player,
+.chromia-right-panel,
+.chromia-center,
+.chromia-card {
+    transition: background-color 300ms ease, color 300ms ease,
+                border-color 300ms ease, box-shadow 300ms ease;
+}
+
+/* ─── Onboarding (unchanged) ────────────────────────────────────────────── */
 .chromia-onboarding {
     background-color: transparent;
 }
 
 .chromia-welcome-title {
-    font-size: 2.4em;
+    font-size: 2.6em;
     font-weight: 800;
     color: @accent;
+    letter-spacing: -0.02em;
 }
 
 .chromia-welcome-subtitle {
@@ -26,28 +51,353 @@ window {
     color: @text;
 }
 
+/* ─── Shell layout ──────────────────────────────────────────────────────── */
+.chromia-shell {
+    background-color: @background;
+    padding: 0;
+}
+
+.chromia-body {
+    background-color: transparent;
+    padding: 0;
+}
+
+/* ─── Sidebar ───────────────────────────────────────────────────────────── */
+.chromia-sidebar {
+    background-color: alpha(@surface, 0.55);
+    border-right: 1px solid alpha(@overlay, 0.55);
+    padding: 18px 14px;
+    min-width: 200px;
+}
+
+/* Glass UI foundation: translucency + blur if the compositor supports it. */
+.chromia-sidebar {
+    background-color: alpha(@surface, 0.62);
+}
+
+/* Logo block */
+.chromia-logo {
+    padding: 6px 4px 14px 4px;
+    margin-bottom: 6px;
+}
+
+.chromia-logo-mark {
+    min-width: 38px;
+    min-height: 38px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, @accent, alpha(@accent, 0.55));
+    box-shadow: 0 6px 18px alpha(@accent, 0.35),
+                inset 0 1px 0 alpha(white, 0.18);
+}
+
+.chromia-logo-letter {
+    color: white;
+    font-weight: 800;
+    font-size: 1.25em;
+}
+
+.chromia-logo-title {
+    font-size: 1.15em;
+    font-weight: 700;
+    color: @text;
+    letter-spacing: -0.01em;
+}
+
+.chromia-logo-subtitle {
+    font-size: 0.78em;
+    color: @subtext;
+    letter-spacing: 0.02em;
+}
+
+/* Navigation */
+.chromia-nav {
+    padding: 4px 0;
+}
+
+.chromia-navbutton {
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: transparent;
+    color: @subtext;
+    transition: background-color 200ms ease, color 200ms ease,
+                transform 200ms ease;
+}
+
+.chromia-navbutton:hover {
+    background: alpha(@accent, 0.10);
+    color: @text;
+}
+
+.chromia-navbutton:active {
+    background: alpha(@accent, 0.18);
+    color: @text;
+    transform: scale(0.98);
+}
+
+.chromia-navbutton.active {
+    background: alpha(@accent, 0.20);
+    color: @text;
+    box-shadow: inset 0 0 0 1px alpha(@accent, 0.35);
+}
+
+.chromia-navbutton.active image {
+    color: @accent;
+    -gtk-icon-shadow: 0 0 12px alpha(@accent, 0.55);
+}
+
+/* Section heading (Playlists, etc.) */
+.chromia-section-heading {
+    font-size: 0.74em;
+    font-weight: 700;
+    color: @subtext;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0 6px;
+    margin-top: 6px;
+}
+
+.chromia-empty {
+    color: @subtext;
+    font-size: 0.9em;
+    padding: 4px 6px;
+    opacity: 0.7;
+}
+
+/* Playlist rows */
+.chromia-playlists {
+    padding: 0 2px;
+}
+
+.chromia-playlist-row {
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: @subtext;
+    transition: background-color 180ms ease, color 180ms ease;
+}
+
+.chromia-playlist-row:hover {
+    background: alpha(@overlay, 0.45);
+    color: @text;
+}
+
+/* Profile row at the bottom */
+.chromia-profile {
+    border-radius: 14px;
+    padding: 10px 8px;
+    background: alpha(@overlay, 0.35);
+    transition: background-color 200ms ease;
+}
+
+.chromia-profile:hover {
+    background: alpha(@overlay, 0.6);
+}
+
+.chromia-avatar {
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, alpha(@accent, 0.85), alpha(@accent, 0.45));
+    box-shadow: 0 4px 12px alpha(@accent, 0.35);
+}
+
+.chromia-avatar-letter {
+    color: white;
+    font-weight: 700;
+}
+
+.chromia-profile-name {
+    font-weight: 600;
+    color: @text;
+}
+
+.chromia-profile-detail {
+    font-size: 0.82em;
+    color: @subtext;
+}
+
+/* ─── Center panel ──────────────────────────────────────────────────────── */
+.chromia-center {
+    padding: 22px 24px 16px 24px;
+    background-color: transparent;
+}
+
+.chromia-page-header {
+    margin-bottom: 6px;
+}
+
+.chromia-page-title {
+    font-size: 1.85em;
+    font-weight: 800;
+    color: @text;
+    letter-spacing: -0.02em;
+}
+
+.chromia-page-subtitle {
+    color: @subtext;
+    font-size: 0.95em;
+}
+
+/* Library search row lives inside the center panel */
+.chromia-center searchentry,
+.chromia-center search {
+    border-radius: 12px;
+}
+
+/* ─── Right panel ───────────────────────────────────────────────────────── */
+.chromia-right-panel {
+    background-color: alpha(@surface, 0.42);
+    border-left: 1px solid alpha(@overlay, 0.55);
+    padding: 14px 12px;
+    min-width: 280px;
+}
+
+.chromia-slot {
+    padding: 4px 4px 14px 4px;
+}
+
+/* AlbumArt slot */
+.chromia-album-art-card {
+    padding: 8px 4px 16px 4px;
+}
+
+.chromia-album-art {
+    border-radius: 18px;
+    box-shadow: 0 16px 36px alpha(black, 0.45),
+                0 0 0 1px alpha(white, 0.06) inset;
+    background: alpha(@overlay, 0.5);
+    transition: transform 250ms cubic-bezier(.2,.7,.3,1.2),
+                box-shadow 250ms ease;
+}
+
+.chromia-album-art:hover {
+    transform: scale(1.02);
+    box-shadow: 0 22px 48px alpha(black, 0.55),
+                0 0 0 1px alpha(@accent, 0.20) inset;
+}
+
+.chromia-art-title {
+    font-weight: 700;
+    color: @text;
+    font-size: 1.05em;
+}
+
+.chromia-art-subtitle {
+    color: @subtext;
+    font-size: 0.92em;
+}
+
+/* ─── Bottom player ─────────────────────────────────────────────────────── */
+.chromia-bottom-player {
+    background: alpha(@surface, 0.78);
+    border-top: 1px solid alpha(@overlay, 0.55);
+    padding: 12px 18px;
+    min-height: 76px;
+    box-shadow: 0 -8px 24px alpha(black, 0.18);
+}
+
+/* Glass foundation for the bottom bar */
+.chromia-bottom-player {
+    background: alpha(@surface, 0.72);
+}
+
+.chromia-bottom-cover {
+    border-radius: 12px;
+    box-shadow: 0 6px 16px alpha(black, 0.35);
+}
+
+.chromia-bottom-info-extra {
+    padding: 0 6px;
+}
+
+.chromia-info-pill {
+    background: alpha(@overlay, 0.55);
+    border-radius: 999px;
+    padding: 4px 10px;
+    color: @subtext;
+    font-size: 0.78em;
+    font-variant: tabular-nums;
+    min-width: 12px;
+}
+
+.chromia-preset {
+    border-radius: 10px;
+}
+
+.chromia-transport {
+    border-radius: 12px;
+    padding: 6px;
+    color: @subtext;
+    transition: background-color 180ms ease, color 180ms ease,
+                transform 180ms ease;
+}
+
+.chromia-transport:hover {
+    background: alpha(@overlay, 0.55);
+    color: @text;
+}
+
+.chromia-transport:active {
+    transform: scale(0.92);
+}
+
+.chromia-play {
+    background: alpha(@accent, 0.18);
+    color: @accent;
+    box-shadow: inset 0 0 0 1px alpha(@accent, 0.25);
+    min-width: 38px;
+    min-height: 38px;
+    border-radius: 14px;
+}
+
+.chromia-play:hover {
+    background: alpha(@accent, 0.28);
+    color: @text;
+}
+
+.chromia-play:checked {
+    background: @accent;
+    color: @background;
+}
+
+.chromia-progress {
+    min-height: 6px;
+}
+
+/* ─── Cards / generic surfaces ──────────────────────────────────────────── */
+.chromia-card,
+.card {
+    background: alpha(@surface, 0.82);
+    border-radius: 16px;
+    padding: 14px;
+    box-shadow: 0 6px 22px alpha(black, 0.28),
+                inset 0 1px 0 alpha(white, 0.05);
+}
+
+/* ─── Player bar (legacy / onboarding) ──────────────────────────────────── */
 .chromia-player-bar {
     background-color: @surface;
     border-bottom: 1px solid @overlay;
 }
 
 .chromia-cover {
-    border-radius: 8px;
+    border-radius: 10px;
 }
 
 .chromia-title {
     font-weight: bold;
-    font-size: 1.1em;
+    font-size: 1.05em;
     color: @text;
 }
 
 .chromia-subtitle {
     color: @subtext;
+    font-size: 0.92em;
 }
 
 .chromia-time {
     font-variant: tabular-nums;
     color: @subtext;
+    font-size: 0.85em;
 }
 
 .chromia-header {
@@ -61,89 +411,335 @@ window {
 }
 
 .chromia-row-subtitle {
-    font-size: 0.9em;
+    font-size: 0.88em;
     color: @subtext;
 }
 
+/* ─── Lists ─────────────────────────────────────────────────────────────── */
 .chromia-list {
     background-color: transparent;
 }
 
 .chromia-list row {
-    border-radius: 8px;
-    padding: 2px;
+    border-radius: 10px;
+    padding: 4px 6px;
+    transition: background-color 160ms ease, transform 160ms ease;
 }
 
 .chromia-list row:hover {
-    background-color: @overlay;
+    background-color: alpha(@overlay, 0.45);
+}
+
+.chromia-list row:active {
+    transform: scale(0.99);
 }
 
 .chromia-list row.current {
     background-color: alpha(@accent, 0.18);
-    border-left: 3px solid @accent;
+    box-shadow: inset 3px 0 0 @accent;
 }
 
+.chromia-list row.current .chromia-row-title {
+    color: @accent;
+    font-weight: 700;
+}
+
+/* ─── Lyrics ────────────────────────────────────────────────────────────── */
 .chromia-lyrics-text {
     color: @text;
     font-size: 1.05em;
     background-color: transparent;
+    line-height: 1.55;
+}
+
+/* ─── Sliders / progress bars ───────────────────────────────────────────── */
+scale {
+    min-height: 18px;
 }
 
 scale trough {
-    background-color: @overlay;
-    border-radius: 4px;
-    min-height: 4px;
+    background-color: alpha(@overlay, 0.55);
+    border-radius: 999px;
+    min-height: 5px;
+    min-width: 5px;
 }
 
 scale trough highlight {
     background-color: @accent;
-    border-radius: 4px;
+    border-radius: 999px;
+    box-shadow: 0 0 8px alpha(@accent, 0.45);
+}
+
+scale slider {
+    background-color: @text;
+    border-radius: 50%;
+    min-width: 12px;
+    min-height: 12px;
+    box-shadow: 0 2px 6px alpha(black, 0.35);
+    margin: -5px;
+    transition: transform 160ms ease;
+}
+
+scale slider:hover {
+    transform: scale(1.18);
+    background-color: @accent;
 }
 
 progressbar trough {
-    background-color: @overlay;
-    border-radius: 4px;
+    background-color: alpha(@overlay, 0.55);
+    border-radius: 999px;
 }
 
 progressbar trough progress {
     background-color: @accent;
-    border-radius: 4px;
+    border-radius: 999px;
 }
 
+/* ─── Buttons ───────────────────────────────────────────────────────────── */
 button {
     background-color: transparent;
     border: none;
     color: @text;
-    border-radius: 8px;
+    border-radius: 10px;
+    transition: background-color 180ms ease, color 180ms ease,
+                transform 180ms ease;
 }
 
 button:hover {
-    background-color: @overlay;
+    background-color: alpha(@overlay, 0.55);
 }
 
 button:active,
 button:checked {
-    background-color: @accent-hover;
+    background-color: alpha(@accent, 0.30);
+    color: @text;
+}
+
+button.suggested-action {
+    background: @accent;
     color: @background;
+    font-weight: 600;
+    border-radius: 12px;
+    box-shadow: 0 6px 18px alpha(@accent, 0.35);
 }
 
+button.suggested-action:hover {
+    background: alpha(@accent, 0.85);
+}
 
-/* UI refresh */
-.chromia-card,.card{
-background:alpha(@theme_base_color,0.78);
-border-radius:16px;
-padding:12px;
-box-shadow:0 4px 18px alpha(black,0.25);
+/* ─── DropDown ──────────────────────────────────────────────────────────── */
+dropdown {
+    border-radius: 10px;
 }
-.chromia-sidebar{padding:16px;}
-.chromia-navbutton{
-border-radius:12px;
-padding:10px;
-transition:200ms;
+
+dropdown button {
+    background: alpha(@overlay, 0.45);
+    padding: 6px 10px;
+    border-radius: 10px;
 }
-.chromia-navbutton:hover{background:alpha(@accent,0.12);}
-.chromia-navbutton.active{background:alpha(@accent,0.2);}
-.chromia-bottom-player{
-border-top:1px solid alpha(white,0.05);
-background:alpha(@theme_base_color,0.72);
+
+dropdown button:hover {
+    background: alpha(@overlay, 0.7);
+}
+
+/* ─── Paned separators ──────────────────────────────────────────────────── */
+paned > separator {
+    background-color: alpha(@overlay, 0.35);
+    min-width: 1px;
+}
+
+paned > separator:active {
+    background-color: alpha(@accent, 0.55);
+}
+
+/* ─── Album grid (Center panel) ─────────────────────────────────────────── */
+.chromia-album-grid-wrap {
+    margin-top: 8px;
+}
+
+.chromia-albums-heading {
+    color: @text;
+    font-size: 1.05em;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 700;
+}
+
+.chromia-albums-count {
+    color: @subtext;
+    font-size: 0.85em;
+    padding-top: 2px;
+}
+
+.chromia-album-grid {
+    background: transparent;
+    padding: 2px;
+}
+
+.chromia-album-item {
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+.chromia-album-card {
+    padding: 12px;
+    border-radius: 14px;
+    background: alpha(@surface, 0.55);
+    transition: background-color 200ms ease, transform 200ms ease,
+                box-shadow 200ms ease;
+    box-shadow: 0 4px 14px alpha(black, 0.18);
+}
+
+.chromia-album-item:hover .chromia-album-card {
+    background: alpha(@surface, 0.85);
+    transform: translateY(-4px);
+    box-shadow: 0 14px 28px alpha(black, 0.32),
+                0 0 0 1px alpha(@accent, 0.18);
+}
+
+.chromia-album-item:active .chromia-album-card {
+    transform: translateY(-1px) scale(0.985);
+}
+
+.chromia-album-cover-wrap {
+    border-radius: 12px;
+    box-shadow: 0 8px 22px alpha(black, 0.32);
+}
+
+.chromia-album-cover {
+    border-radius: 12px;
+}
+
+.chromia-album-placeholder {
+    background: linear-gradient(135deg, alpha(@accent, 0.85), alpha(@overlay, 0.6));
+    border-radius: 12px;
+}
+
+.chromia-album-placeholder-letter {
+    color: white;
+    font-weight: 800;
+    font-size: 2.4em;
+    text-shadow: 0 4px 12px alpha(black, 0.45);
+}
+
+.chromia-album-title {
+    color: @text;
+    font-weight: 600;
+    font-size: 0.95em;
+}
+
+.chromia-album-artist {
+    color: @subtext;
+    font-size: 0.85em;
+}
+
+/* ─── Slot drag-and-drop (edit mode) ────────────────────────────────────── */
+.chromia-slot {
+    transition: outline 160ms ease, box-shadow 160ms ease;
+}
+
+.chromia-slot.drop-target {
+    outline: 2px dashed alpha(@accent, 0.7);
+    outline-offset: 4px;
+    border-radius: 14px;
+    background: alpha(@accent, 0.06);
+}
+
+.chromia-slot.dragging {
+    opacity: 0.45;
+}
+
+.chromia-slot-handle {
+    color: @subtext;
+    padding: 2px 6px;
+    border-radius: 8px;
+    transition: background-color 180ms ease, color 180ms ease;
+}
+
+.chromia-slot-handle:hover {
+    background: alpha(@overlay, 0.6);
+    color: @text;
+}
+
+/* Slot header (visible in edit mode only) */
+.chromia-slot-header {
+    background: alpha(@overlay, 0.35);
+    border-radius: 8px 8px 0 0;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+}
+
+.chromia-slot-title {
+    font-size: 0.8em;
+    font-weight: 700;
+    color: @subtext;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* Edit-mode toggle (top of the right panel) */
+.chromia-edit-toggle {
+    background: alpha(@overlay, 0.4);
+    border-radius: 999px;
+    padding: 4px 12px;
+    color: @subtext;
+    font-size: 0.82em;
+    font-weight: 600;
+    transition: background-color 200ms ease, color 200ms ease;
+}
+
+.chromia-edit-toggle:hover {
+    background: alpha(@overlay, 0.7);
+    color: @text;
+}
+
+.chromia-edit-toggle:checked {
+    background: alpha(@accent, 0.28);
+    color: @text;
+    box-shadow: inset 0 0 0 1px alpha(@accent, 0.4);
+}
+
+/* ─── Glass UI mode (opt-in via `.glass` class on the window) ──────────── */
+window.glass .chromia-sidebar,
+window.glass .chromia-right-panel,
+window.glass .chromia-bottom-player {
+    background-color: alpha(@surface, 0.55);
+    backdrop-filter: blur(24px);
+}
+
+window.glass .chromia-shell {
+    background-color: alpha(@background, 0.78);
+}
+
+window.glass .chromia-card,
+window.glass .card {
+    background-color: alpha(@surface, 0.62);
+    backdrop-filter: blur(18px);
+}
+
+/* ─── Scrollbars (subtle, Spotify-like) ─────────────────────────────────── */
+scrollbar {
+    border: none;
+    background: transparent;
+}
+
+scrollbar slider {
+    background-color: alpha(@overlay, 0.55);
+    border-radius: 999px;
+    min-width: 6px;
+    min-height: 36px;
+}
+
+scrollbar slider:hover {
+    background-color: alpha(@subtext, 0.7);
+    min-width: 8px;
+}
+
+scrollbar.vertical slider {
+    min-height: 36px;
+}
+
+scrollbar.horizontal slider {
+    min-width: 36px;
 }

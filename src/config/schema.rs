@@ -25,6 +25,9 @@ pub struct Config {
     pub integrations: IntegrationsConfig,
     /// Filesystem locations (cache, etc).
     pub paths: PathsConfig,
+    /// Appearance options (glass UI, animations, edit mode).
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
 }
 
 /// `serde` default for booleans that should start as `true`.
@@ -42,6 +45,7 @@ impl Default for Config {
             audio: AudioConfig::default(),
             integrations: IntegrationsConfig::default(),
             paths: PathsConfig::default(),
+            appearance: AppearanceConfig::default(),
         }
     }
 }
@@ -155,6 +159,15 @@ impl Default for CustomThemeConfig {
 pub struct LayoutConfig {
     /// Ordered placement of every widget in the window.
     pub widgets: Vec<WidgetPlacement>,
+    /// Right-panel slot configuration.
+    #[serde(default)]
+    pub right_panel: RightPanelLayout,
+    /// Bottom-player preset configuration.
+    #[serde(default)]
+    pub bottom_player: BottomPlayerLayout,
+    /// Per-page slot overrides (keyed by page name).
+    #[serde(default)]
+    pub pages: std::collections::HashMap<String, PageLayout>,
 }
 
 impl Default for LayoutConfig {
@@ -210,8 +223,64 @@ impl Default for LayoutConfig {
                     visible: false,
                 },
             ],
+            right_panel: RightPanelLayout::default(),
+            bottom_player: BottomPlayerLayout::default(),
+            pages: std::collections::HashMap::new(),
         }
     }
+}
+
+/// Right-panel slot configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct RightPanelLayout {
+    /// Ordered widget identifiers, e.g. `["AlbumArt", "Player", "Lyrics"]`.
+    pub slots: Vec<String>,
+}
+
+impl Default for RightPanelLayout {
+    fn default() -> Self {
+        Self {
+            slots: vec![
+                "AlbumArt".into(),
+                "Player".into(),
+                "Lyrics".into(),
+                "Queue".into(),
+            ],
+        }
+    }
+}
+
+/// Bottom-player preset configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct BottomPlayerLayout {
+    /// Preset name: `minimal`, `default` or `audiophile`.
+    pub preset: String,
+    /// Optional explicit element list (overrides `preset` when non-empty).
+    #[serde(default)]
+    pub elements: Vec<String>,
+}
+
+impl Default for BottomPlayerLayout {
+    fn default() -> Self {
+        Self {
+            preset: "default".into(),
+            elements: Vec::new(),
+        }
+    }
+}
+
+/// Per-page layout (center + right slots) overrides.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct PageLayout {
+    /// Center-page widget identifiers.
+    #[serde(default)]
+    pub center: Vec<String>,
+    /// Right-panel slot identifiers for this page.
+    #[serde(default)]
+    pub right: Vec<String>,
 }
 
 /// A single widget placement in the layout grid.
@@ -366,4 +435,77 @@ impl Default for PathsConfig {
             cache_dir: std::path::PathBuf::from("~/.cache/chromia"),
         }
     }
+}
+
+/// Appearance / Glass UI options.
+///
+/// Mirrors the `[appearance]` section of `CHROMIA.md`. Glass UI only takes
+/// effect when the compositor supports blur (Hyprland, KDE); on unsupported
+/// compositors the surfaces fall back to a translucent fill.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct AppearanceConfig {
+    /// Enable the Glass UI look.
+    pub glass: bool,
+    /// Opacity of glass surfaces, 0.0–1.0.
+    pub glass_opacity: f32,
+    /// Blur radius in pixels applied behind glass surfaces.
+    pub blur: u8,
+    /// Add a subtle noise texture on top of glass surfaces for depth.
+    pub noise: bool,
+    /// Glass intensity preset.
+    pub glass_mode: GlassMode,
+    /// Corner radius (px) used by cards and panels.
+    pub border_radius: u8,
+    /// Master switch for all animations.
+    pub animations: bool,
+    /// Whether the layout editor (drag-and-drop slots) is active.
+    pub edit_mode: bool,
+    /// When glass is on, follow the wallpaper instead of the dynamic palette.
+    pub follow_wallpaper: bool,
+    /// Source of the glass background.
+    pub glass_background: GlassBackground,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            glass: false,
+            glass_opacity: 0.82,
+            blur: 24,
+            noise: true,
+            glass_mode: GlassMode::Light,
+            border_radius: 14,
+            animations: true,
+            edit_mode: false,
+            follow_wallpaper: false,
+            glass_background: GlassBackground::Dynamic,
+        }
+    }
+}
+
+/// Glass intensity preset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GlassMode {
+    /// Subtle translucency.
+    #[default]
+    Light,
+    /// Stronger blur and dimmer tint.
+    Strong,
+    /// Glass UI disabled (the option is kept for symmetry).
+    Disabled,
+}
+
+/// Source of the glass background.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GlassBackground {
+    /// Dynamic accent color mixed into the glass tint.
+    #[default]
+    Dynamic,
+    /// Wallpaper / album art blurred behind the window.
+    Wallpaper,
+    /// Solid palette color (no transparency).
+    Solid,
 }
