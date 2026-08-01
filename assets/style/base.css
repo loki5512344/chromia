@@ -126,3 +126,24 @@ button:checked {
     background-color: @accent-hover;
     color: @background;
 }
+
+
+/* UI refresh */
+.chromia-card,.card{
+background:alpha(@theme_base_color,0.78);
+border-radius:16px;
+padding:12px;
+box-shadow:0 4px 18px alpha(black,0.25);
+}
+.chromia-sidebar{padding:16px;}
+.chromia-navbutton{
+border-radius:12px;
+padding:10px;
+transition:200ms;
+}
+.chromia-navbutton:hover{background:alpha(@accent,0.12);}
+.chromia-navbutton.active{background:alpha(@accent,0.2);}
+.chromia-bottom-player{
+border-top:1px solid alpha(white,0.05);
+background:alpha(@theme_base_color,0.72);
+}
