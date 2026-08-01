@@ -1,0 +1,183 @@
+//! Equalizer model: per-band gain configuration with named presets.
+//!
+//! The model only tracks gains and preset state; the actual DSP is deferred.
+
+/// Number of equalizer bands.
+pub const BANDS: usize = 10;
+/// Centre frequency of each band, in Hz.
+pub const BAND_FREQUENCIES: [f32; BANDS] = [
+    32.0, 64.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
+/// Minimum allowed band gain, in dB.
+pub const MIN_GAIN_DB: f32 = -12.0;
+/// Maximum allowed band gain, in dB.
+pub const MAX_GAIN_DB: f32 = 12.0;
+
+/// A named set of band gains.
+#[derive(Debug, Clone, Copy)]
+pub struct Preset {
+    /// Preset display name.
+    pub name: &'static str,
+    /// One gain (dB) per band.
+    pub gains: [f32; BANDS],
+}
+
+const PRESETS: [Preset; 6] = [
+    Preset {
+        name: "Flat",
+        gains: [0.0; BANDS],
+    },
+    Preset {
+        name: "Bass Boost",
+        gains: [6.0, 5.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    },
+    Preset {
+        name: "Vocal",
+        gains: [-2.0, -1.0, 0.0, 2.0, 3.0, 3.0, 2.0, 1.0, 0.0, -1.0],
+    },
+    Preset {
+        name: "Treble Boost",
+        gains: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 4.0, 6.0, 7.0],
+    },
+    Preset {
+        name: "Rock",
+        gains: [5.0, 4.0, 2.0, 0.0, -1.0, 1.0, 3.0, 4.0, 3.0, 2.0],
+    },
+    Preset {
+        name: "Jazz",
+        gains: [4.0, 3.0, 1.0, 0.0, 1.0, 2.0, 3.0, 2.0, 1.0, 0.0],
+    },
+];
+
+/// All built-in presets.
+pub fn presets() -> &'static [Preset] {
+    &PRESETS
+}
+
+/// Per-band gain model.
+pub struct Equalizer {
+    gains: [f32; BANDS],
+    enabled: bool,
+}
+
+impl Equalizer {
+    /// Creates an equalizer with all bands flat and DSP disabled.
+    ///
+    // TODO(loki): apply biquad filter chain as a rodio Source wrapper.
+    pub fn new() -> Self {
+        Self {
+            gains: [0.0; BANDS],
+            enabled: false,
+        }
+    }
+
+    /// Sets a single band's gain in dB, clamped to the supported range.
+    pub fn set_band(&mut self, index: usize, gain_db: f32) {
+        if index >= BANDS {
+            return;
+        }
+        self.gains[index] = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+    }
+
+    /// Gain of a band in dB; `0.0` for out-of-range indices.
+    #[allow(dead_code)] // exercised by tests, used by a future settings UI
+    pub fn gain(&self, index: usize) -> f32 {
+        if index >= BANDS {
+            0.0
+        } else {
+            self.gains[index]
+        }
+    }
+
+    /// Applies a named preset. Returns `false` if the name is unknown.
+    pub fn set_preset(&mut self, name: &str) -> bool {
+        for preset in PRESETS {
+            if preset.name == name {
+                self.gains = preset.gains;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Enables or disables the equalizer.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Whether the equalizer is enabled.
+    #[allow(dead_code)] // exercised by tests, used by a future settings UI
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Snapshot of all band gains in dB.
+    #[allow(dead_code)] // exercised by tests, used by a future settings UI
+    pub fn gains(&self) -> [f32; BANDS] {
+        self.gains
+    }
+}
+
+impl Default for Equalizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BANDS, Equalizer, MAX_GAIN_DB, MIN_GAIN_DB, presets};
+
+    #[test]
+    fn set_band_clamps_gain_and_index() {
+        let mut eq = Equalizer::new();
+        eq.set_band(3, 50.0);
+        assert_eq!(eq.gain(3), MAX_GAIN_DB);
+        eq.set_band(3, -50.0);
+        assert_eq!(eq.gain(3), MIN_GAIN_DB);
+        eq.set_band(3, 4.5);
+        assert_eq!(eq.gain(3), 4.5);
+        eq.set_band(999, 3.0);
+        assert_eq!(eq.gain(999), 0.0);
+    }
+
+    #[test]
+    fn set_preset_unknown_returns_false() {
+        let mut eq = Equalizer::new();
+        assert!(!eq.set_preset("No Such Preset"));
+    }
+
+    #[test]
+    fn flat_preset_zeroes_gains() {
+        let mut eq = Equalizer::new();
+        for i in 0..BANDS {
+            eq.set_band(i, 6.0);
+        }
+        assert!(eq.set_preset("Flat"));
+        assert_eq!(eq.gains(), [0.0; BANDS]);
+    }
+
+    #[test]
+    fn gains_roundtrip() {
+        let mut eq = Equalizer::new();
+        eq.set_band(1, -4.2);
+        assert_eq!(eq.gain(1), -4.2);
+        assert_eq!(eq.gains()[1], -4.2);
+    }
+
+    #[test]
+    fn presets_expose_required_names() {
+        let names: Vec<&str> = presets().iter().map(|p| p.name).collect();
+        for required in [
+            "Flat",
+            "Bass Boost",
+            "Vocal",
+            "Treble Boost",
+            "Rock",
+            "Jazz",
+        ] {
+            assert!(names.contains(&required), "missing preset {required}");
+        }
+        assert!(presets().iter().all(|p| p.gains.len() == BANDS));
+    }
+}

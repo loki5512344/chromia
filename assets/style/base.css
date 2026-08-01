@@ -1,0 +1,128 @@
+/* Chromia base stylesheet — palette-independent rules.
+   The dynamic palette block is appended by theme::css::generate_css. */
+
+window {
+    background-color: @theme_bg_color;
+    color: @theme_text_color;
+}
+
+.chromia-onboarding {
+    background-color: transparent;
+}
+
+.chromia-welcome-title {
+    font-size: 2.4em;
+    font-weight: 800;
+    color: @accent;
+}
+
+.chromia-welcome-subtitle {
+    font-size: 1.05em;
+    color: @subtext;
+}
+
+.chromia-folder {
+    font-family: monospace;
+    color: @text;
+}
+
+.chromia-player-bar {
+    background-color: @surface;
+    border-bottom: 1px solid @overlay;
+}
+
+.chromia-cover {
+    border-radius: 8px;
+}
+
+.chromia-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    color: @text;
+}
+
+.chromia-subtitle {
+    color: @subtext;
+}
+
+.chromia-time {
+    font-variant: tabular-nums;
+    color: @subtext;
+}
+
+.chromia-header {
+    font-weight: bold;
+    font-size: 0.95em;
+    color: @text;
+}
+
+.chromia-row-title {
+    color: @text;
+}
+
+.chromia-row-subtitle {
+    font-size: 0.9em;
+    color: @subtext;
+}
+
+.chromia-list {
+    background-color: transparent;
+}
+
+.chromia-list row {
+    border-radius: 8px;
+    padding: 2px;
+}
+
+.chromia-list row:hover {
+    background-color: @overlay;
+}
+
+.chromia-list row.current {
+    background-color: alpha(@accent, 0.18);
+    border-left: 3px solid @accent;
+}
+
+.chromia-lyrics-text {
+    color: @text;
+    font-size: 1.05em;
+    background-color: transparent;
+}
+
+scale trough {
+    background-color: @overlay;
+    border-radius: 4px;
+    min-height: 4px;
+}
+
+scale trough highlight {
+    background-color: @accent;
+    border-radius: 4px;
+}
+
+progressbar trough {
+    background-color: @overlay;
+    border-radius: 4px;
+}
+
+progressbar trough progress {
+    background-color: @accent;
+    border-radius: 4px;
+}
+
+button {
+    background-color: transparent;
+    border: none;
+    color: @text;
+    border-radius: 8px;
+}
+
+button:hover {
+    background-color: @overlay;
+}
+
+button:active,
+button:checked {
+    background-color: @accent-hover;
+    color: @background;
+}

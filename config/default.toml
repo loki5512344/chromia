@@ -1,0 +1,93 @@
+first_run = true
+
+[theme]
+mode = "dynamic"
+transition_ms = 300
+blur_background = true
+blur_strength = 20
+
+[theme.catppuccin]
+flavor = "mocha"
+accent = "mauve"
+
+[theme.custom]
+background = "#1e1e2e"
+surface = "#313244"
+overlay = "#45475a"
+accent = "#cba6f7"
+text = "#cdd6f4"
+subtext = "#a6adc8"
+
+[layout]
+
+[[layout.widgets]]
+id = "PlayerCore"
+x = 0
+y = 0
+width = 3
+height = 1
+visible = true
+
+[[layout.widgets]]
+id = "Library"
+x = 3
+y = 0
+width = 3
+height = 2
+visible = true
+
+[[layout.widgets]]
+id = "Queue"
+x = 6
+y = 0
+width = 2
+height = 2
+visible = true
+
+[[layout.widgets]]
+id = "Lyrics"
+x = 0
+y = 1
+width = 3
+height = 2
+visible = true
+
+[[layout.widgets]]
+id = "Equalizer"
+x = 0
+y = 2
+width = 8
+height = 1
+visible = false
+
+[[layout.widgets]]
+id = "MiniPlayer"
+x = 0
+y = 0
+width = 8
+height = 1
+visible = false
+
+[sources]
+enabled = ["local", "youtube", "soundcloud"]
+default = "local"
+
+[sources.local]
+paths = ["~/Music"]
+watch = true
+
+[sources.youtube]
+quality = "best"
+cache_dir = "~/.cache/chromia/youtube"
+
+[audio]
+volume = 0.8
+crossfade_ms = 0
+replaygain = false
+
+[integrations]
+mpris = true
+discord = true
+
+[paths]
+cache_dir = "~/.cache/chromia"
