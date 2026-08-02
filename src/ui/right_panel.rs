@@ -23,6 +23,7 @@ use crate::config::schema::AppearanceConfig;
 use crate::ui::UiContext;
 use crate::ui::layout::slots::{SlotWidget, default_slots};
 use crate::ui::widgets::album_art::AlbumArt;
+use crate::ui::widgets::audio_info::AudioInfo;
 use crate::ui::widgets::equalizer::EqualizerWidget;
 use crate::ui::widgets::lyrics::Lyrics;
 use crate::ui::widgets::queue::Queue as QueueWidget;
@@ -40,6 +41,7 @@ struct SharedState {
     lyrics: Lyrics,
     queue: QueueWidget,
     equalizer: EqualizerWidget,
+    audio_info: AudioInfo,
 }
 
 /// The right-panel container hosting the customizable vertical slot stack.
@@ -64,6 +66,7 @@ impl RightPanel {
             lyrics: Lyrics::new(ctx),
             queue: QueueWidget::new(ctx),
             equalizer: EqualizerWidget::new(ctx),
+            audio_info: AudioInfo::new(ctx),
         });
 
         rebuild(&state);
@@ -119,6 +122,7 @@ impl RightPanel {
         self.state.lyrics.update(event);
         self.state.queue.update(event);
         self.state.equalizer.update(event);
+        self.state.audio_info.update(event);
     }
 }
 

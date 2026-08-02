@@ -743,3 +743,161 @@ scrollbar.vertical slider {
 scrollbar.horizontal slider {
     min-width: 36px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v1.0 additions: AudioInfo · History · Settings · Search page
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── AudioInfo widget ──────────────────────────────────────────────────── */
+.chromia-audio-info {
+    padding: 14px 16px;
+    border-radius: 10px;
+    background-color: alpha(@surface, 0.45);
+    border: 1px solid alpha(@overlay, 0.3);
+}
+
+.chromia-audio-info-grid {
+    margin-top: 4px;
+}
+
+.chromia-audio-info-label {
+    font-size: 0.78em;
+    color: @subtext;
+    font-weight: 500;
+    min-width: 88px;
+}
+
+.chromia-audio-info-value {
+    font-size: 0.86em;
+    color: @text;
+    font-weight: 600;
+}
+
+.chromia-source-badge {
+    font-size: 0.75em;
+    color: @accent;
+    font-weight: 600;
+}
+
+/* ─── History widget ─────────────────────────────────────────────────────── */
+.chromia-history {
+    padding: 0;
+}
+
+.chromia-history-idx {
+    font-size: 0.78em;
+    color: alpha(@subtext, 0.55);
+    min-width: 28px;
+}
+
+.chromia-history-plays {
+    font-size: 0.75em;
+    color: alpha(@subtext, 0.6);
+}
+
+/* ─── Settings page ──────────────────────────────────────────────────────── */
+.chromia-settings {
+    background-color: transparent;
+}
+
+.chromia-settings-section {
+    font-size: 0.72em;
+    font-weight: 700;
+    color: @accent;
+    margin-bottom: 2px;
+}
+
+.chromia-settings-sep {
+    background-color: alpha(@overlay, 0.4);
+    min-height: 1px;
+}
+
+.chromia-settings-row {
+    padding: 8px 0;
+    border-bottom: 1px solid alpha(@overlay, 0.2);
+}
+
+.chromia-settings-label {
+    font-size: 0.9em;
+    color: @text;
+}
+
+.chromia-settings-combo {
+    min-width: 160px;
+    border-radius: 8px;
+    background-color: alpha(@surface, 0.65);
+    border: 1px solid alpha(@overlay, 0.45);
+    color: @text;
+    font-size: 0.88em;
+    padding: 2px 6px;
+}
+
+.chromia-settings-combo:hover {
+    border-color: alpha(@accent, 0.5);
+}
+
+.chromia-settings-scale {
+    min-width: 180px;
+}
+
+.chromia-settings-scale trough {
+    background-color: alpha(@surface, 0.8);
+    border-radius: 999px;
+    min-height: 4px;
+}
+
+.chromia-settings-scale trough:hover highlight {
+    background-color: @accent;
+}
+
+.chromia-settings-scale highlight {
+    background-color: @accent;
+    border-radius: 999px;
+}
+
+.chromia-settings-entry {
+    border-radius: 8px;
+    background-color: alpha(@surface, 0.65);
+    border: 1px solid alpha(@overlay, 0.45);
+    color: @text;
+    font-size: 0.88em;
+    padding: 4px 10px;
+    min-width: 180px;
+}
+
+.chromia-settings-entry:focus {
+    border-color: alpha(@accent, 0.7);
+    box-shadow: 0 0 0 2px alpha(@accent, 0.18);
+}
+
+.chromia-settings-about {
+    font-size: 0.8em;
+    color: @subtext;
+    padding: 6px 0;
+}
+
+/* ─── Ghost button (used in History clear) ───────────────────────────────── */
+.chromia-btn-ghost {
+    background: transparent;
+    border: 1px solid alpha(@overlay, 0.5);
+    border-radius: 6px;
+    color: @subtext;
+    font-size: 0.82em;
+    padding: 2px 10px;
+    min-height: 0;
+}
+
+.chromia-btn-ghost:hover {
+    border-color: alpha(@accent, 0.5);
+    color: @accent;
+    background: alpha(@accent, 0.08);
+}
+
+/* ─── Stack page transitions / search page ───────────────────────────────── */
+stack {
+    background-color: transparent;
+}
+
+.chromia-search-icon {
+    color: alpha(@accent, 0.7);
+}

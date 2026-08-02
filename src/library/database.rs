@@ -475,7 +475,6 @@ impl Database {
     /// # Errors
     ///
     /// Returns an error when the query fails.
-    #[allow(dead_code)] // TODO(loki): history view in the GUI
     pub fn recent_history(&self, limit: u32) -> anyhow::Result<Vec<Track>> {
         let conn = self.conn.lock();
         let mut stmt = conn
@@ -496,7 +495,6 @@ impl Database {
     /// # Errors
     ///
     /// Returns an error when the delete fails.
-    #[allow(dead_code)] // TODO(loki): history view in the GUI
     pub fn clear_history(&self) -> anyhow::Result<()> {
         let conn = self.conn.lock();
         conn.execute("DELETE FROM history", [])

@@ -1,7 +1,10 @@
 pub mod album_art;
 pub mod album_grid;
+pub mod audio_info;
 pub mod equalizer;
+pub mod history;
 pub mod library;
 pub mod lyrics;
 pub mod player;
 pub mod queue;
+pub mod settings;
