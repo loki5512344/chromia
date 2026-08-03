@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use glib::clone;
 use gtk::prelude::*;
@@ -24,6 +25,10 @@ use crate::ui::UiContext;
 pub enum NavPage {
     /// The local library / search view.
     Library,
+    /// Artist browser (library page drill-down).
+    Artists,
+    /// Genre browser (library page drill-down).
+    Genres,
     /// Search-only view (separate from library browsing).
     Search,
     /// The playback queue.
@@ -37,6 +42,8 @@ impl NavPage {
     fn icon_name(self) -> &'static str {
         match self {
             Self::Library => "media-optical-cd-audio-symbolic",
+            Self::Artists => "avatar-default-symbolic",
+            Self::Genres => "emblem-music-symbolic",
             Self::Search => "system-search-symbolic",
             Self::Queue => "view-list-symbolic",
             Self::Settings => "preferences-system-symbolic",
@@ -47,6 +54,8 @@ impl NavPage {
     fn label(self) -> &'static str {
         match self {
             Self::Library => "Library",
+            Self::Artists => "Artists",
+            Self::Genres => "Genres",
             Self::Search => "Search",
             Self::Queue => "Queue",
             Self::Settings => "Settings",
@@ -54,8 +63,15 @@ impl NavPage {
     }
 
     /// Iterates over every navigation page in display order.
-    const fn all() -> [Self; 4] {
-        [Self::Library, Self::Search, Self::Queue, Self::Settings]
+    const fn all() -> [Self; 6] {
+        [
+            Self::Library,
+            Self::Artists,
+            Self::Genres,
+            Self::Search,
+            Self::Queue,
+            Self::Settings,
+        ]
     }
 }
 
@@ -197,6 +213,9 @@ fn build_profile() -> gtk::Box {
 /// Callback invoked when the active navigation page changes.
 type PageCallback = Rc<RefCell<Option<Box<dyn Fn(NavPage)>>>>;
 
+/// Callback invoked when a playlist should be opened in the center.
+type PlaylistOpenCallback = Rc<RefCell<Option<Box<dyn Fn(i64)>>>>;
+
 /// The sidebar widget — fixed navigation rail.
 ///
 /// Holds a `Rc<RefCell<NavPage>>` so the rest of the UI can query the current
@@ -207,7 +226,11 @@ pub struct Sidebar {
     nav_buttons: Vec<gtk::Button>,
     page: Rc<RefCell<NavPage>>,
     on_page_changed: PageCallback,
+    on_playlist_open: PlaylistOpenCallback,
     playlists_box: gtk::Box,
+    database: Arc<crate::library::database::Database>,
+    playlist_entry: gtk::Entry,
+    playlist_add: gtk::Button,
 }
 
 impl Sidebar {
@@ -233,11 +256,27 @@ impl Sidebar {
             .build();
         playlists_box.append(&empty_playlists());
 
+        let playlist_entry = gtk::Entry::builder()
+            .placeholder_text("New playlist…")
+            .css_classes(vec!["chromia-playlist-new"])
+            .build();
+        let playlist_add = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Create a playlist")
+            .build();
+        let new_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .build();
+        new_row.append(&playlist_entry);
+        new_row.append(&playlist_add);
+
         let playlists_section = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .build();
         playlists_section.append(&playlist_heading);
+        playlists_section.append(&new_row);
         playlists_section.append(&playlists_box);
 
         let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -258,18 +297,25 @@ impl Sidebar {
 
         let page = Rc::new(RefCell::new(NavPage::Library));
         let on_page_changed: PageCallback = Rc::new(RefCell::new(None));
+        let on_playlist_open: PlaylistOpenCallback = Rc::new(RefCell::new(None));
+        let database = ctx.database.clone();
 
         let widget = Self {
             root,
             nav_buttons,
             page,
             on_page_changed,
+            on_playlist_open,
             playlists_box,
+            database,
+            playlist_entry,
+            playlist_add,
         };
 
         widget.mark_active(NavPage::Library);
         widget.wire_nav();
-        widget.load_playlists(ctx);
+        widget.wire_playlist_entry();
+        widget.reload_playlists();
         widget
     }
 
@@ -339,36 +385,124 @@ impl Sidebar {
         }
     }
 
-    /// Loads the user's playlists into the sidebar placeholder.
-    ///
-    /// For now this is a best-effort read; if the database has no playlists the
-    /// empty-state label is kept in place.
-    fn load_playlists(&self, ctx: &UiContext) {
-        let playlists = ctx.database.list_playlists().unwrap_or_default();
-        if playlists.is_empty() {
-            return;
-        }
-        // Clear the placeholder before appending real entries.
-        while let Some(child) = self.playlists_box.first_child() {
-            self.playlists_box.remove(&child);
-        }
-        for playlist in playlists {
-            let row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(10)
-                .css_classes(vec!["chromia-playlist-row"])
-                .build();
-            let icon = gtk::Image::from_icon_name("media-playlist-repeat-symbolic");
-            icon.set_icon_size(gtk::IconSize::Normal);
-            let label = gtk::Label::builder()
-                .label(&playlist.name)
-                .halign(gtk::Align::Start)
-                .hexpand(true)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .build();
-            row.append(&icon);
-            row.append(&label);
-            self.playlists_box.append(&row);
-        }
+    /// Registers a callback that fires whenever a playlist should be opened.
+    pub fn connect_playlist_open<F: Fn(i64) + 'static>(&self, callback: F) {
+        *self.on_playlist_open.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Wires the "new playlist" row: pressing Enter or the button creates the
+    /// playlist and rebuilds the list.
+    fn wire_playlist_entry(&self) {
+        let entry = self.playlist_entry.clone();
+        let add_button = self.playlist_add.clone();
+        let playlists_box = self.playlists_box.clone();
+        let database = self.database.clone();
+        let on_playlist_open = self.on_playlist_open.clone();
+
+        let create = {
+            let entry = entry.clone();
+            move || {
+                let name = entry.text().trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                if let Err(err) = database.create_playlist(&name) {
+                    tracing::warn!(error = %err, "failed to create playlist");
+                    return;
+                }
+                entry.set_text("");
+                populate_playlists(&playlists_box, &database, &on_playlist_open);
+            }
+        };
+
+        let activate = {
+            let create = create.clone();
+            move |_entry: &gtk::Entry| create()
+        };
+        let clicked = {
+            let create = create.clone();
+            move |_button: &gtk::Button| create()
+        };
+        entry.connect_activate(activate);
+        add_button.connect_clicked(clicked);
+    }
+
+    /// Re-loads the playlist list from the database, rebuilding every row.
+    pub fn reload_playlists(&self) {
+        populate_playlists(&self.playlists_box, &self.database, &self.on_playlist_open);
+    }
+}
+
+/// Rebuilds the playlist list inside `playlists_box` from `database`, wiring
+/// each row to open or delete the playlist via `on_playlist_open`.
+fn populate_playlists(
+    playlists_box: &gtk::Box,
+    database: &Arc<crate::library::database::Database>,
+    on_playlist_open: &PlaylistOpenCallback,
+) {
+    while let Some(child) = playlists_box.first_child() {
+        playlists_box.remove(&child);
+    }
+    let playlists = database.list_playlists().unwrap_or_default();
+    if playlists.is_empty() {
+        playlists_box.append(&empty_playlists());
+        return;
+    }
+    for playlist in playlists {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .css_classes(vec!["chromia-playlist-row"])
+            .build();
+        let icon = gtk::Image::from_icon_name("media-playlist-repeat-symbolic");
+        icon.set_icon_size(gtk::IconSize::Normal);
+        let open = gtk::Button::builder()
+            .child(
+                &gtk::Label::builder()
+                    .label(&playlist.name)
+                    .halign(gtk::Align::Start)
+                    .hexpand(true)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .build(),
+            )
+            .css_classes(vec!["chromia-playlist-open"])
+            .hexpand(true)
+            .build();
+        let delete = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .css_classes(vec!["chromia-playlist-delete"])
+            .build();
+        row.append(&icon);
+        row.append(&open);
+        row.append(&delete);
+
+        let id = playlist.id;
+        open.connect_clicked(clone!(
+            #[strong]
+            on_playlist_open,
+            move |_| {
+                if let Some(cb) = on_playlist_open.borrow().as_ref() {
+                    cb(id);
+                }
+            }
+        ));
+        let database = database.clone();
+        let playlists_box = playlists_box.clone();
+        delete.connect_clicked(clone!(
+            #[strong]
+            database,
+            #[strong]
+            playlists_box,
+            #[strong]
+            on_playlist_open,
+            move |_| {
+                if let Err(err) = database.delete_playlist(id) {
+                    tracing::warn!(error = %err, "failed to delete playlist");
+                    return;
+                }
+                populate_playlists(&playlists_box, &database, &on_playlist_open);
+            }
+        ));
+        playlists_box.append(&row);
     }
 }

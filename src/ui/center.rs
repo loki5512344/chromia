@@ -17,6 +17,7 @@ use crate::audio::PlayerEvent;
 use crate::ui::UiContext;
 use crate::ui::sidebar::NavPage;
 use crate::ui::widgets::album_grid::AlbumGrid;
+use crate::ui::widgets::browser::{BrowseKind, Browser};
 use crate::ui::widgets::history::History;
 use crate::ui::widgets::library::Library;
 use crate::ui::widgets::settings::Settings;
@@ -31,6 +32,8 @@ pub struct Center {
     library: Library,
     history: History,
     settings: Settings,
+    browser_artists: Browser,
+    browser_genres: Browser,
     page: Rc<RefCell<NavPage>>,
 }
 
@@ -103,10 +106,26 @@ impl Center {
             .build();
         queue_page.append(&history.root());
 
+        // Artist / Genre browser pages.
+        let browser_artists = Browser::new(ctx, BrowseKind::Artists);
+        let browser_genres = Browser::new(ctx, BrowseKind::Genres);
+        let artists_page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        artists_page.append(&browser_artists.root());
+        let genres_page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        genres_page.append(&browser_genres.root());
+
         // Settings page.
         let settings = Settings::new(ctx);
 
-        // ── Stack ─────────────────────────────────────────────────────────
+        // ── Stack ────────────────────────────────────────────────────────
         let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
             .transition_duration(180)
@@ -114,6 +133,8 @@ impl Center {
             .vexpand(true)
             .build();
         stack.add_named(&library_page, Some("library"));
+        stack.add_named(&artists_page, Some("artists"));
+        stack.add_named(&genres_page, Some("genres"));
         stack.add_named(&search_page, Some("search"));
         stack.add_named(&queue_page, Some("queue"));
         stack.add_named(&settings.root(), Some("settings"));
@@ -137,6 +158,8 @@ impl Center {
             library,
             history,
             settings,
+            browser_artists,
+            browser_genres,
             page: Rc::new(RefCell::new(NavPage::Library)),
         }
     }
@@ -149,18 +172,36 @@ impl Center {
     /// Switches the active page - updates the header and the stack child.
     pub fn set_page(&self, page: NavPage) {
         *self.page.borrow_mut() = page;
-        let (title, subtitle, stack_name) = match page {
-            NavPage::Library => ("Library", "Your collection, ready to play", "library"),
-            NavPage::Search => ("Search", "Find tracks across every source", "search"),
-            NavPage::Queue => ("History", "Tracks you've listened to recently", "queue"),
-            NavPage::Settings => ("Settings", "Tune Chromia to your taste", "settings"),
+        let (title, subtitle, stack_name, refresh) = match page {
+            NavPage::Library => (
+                "Library",
+                "Your collection, ready to play",
+                "library",
+                false,
+            ),
+            NavPage::Artists => ("Artists", "Browse by artist", "artists", true),
+            NavPage::Genres => ("Genres", "Browse by genre", "genres", true),
+            NavPage::Search => ("Search", "Find tracks across every source", "search", false),
+            NavPage::Queue => (
+                "History",
+                "Tracks you've listened to recently",
+                "queue",
+                false,
+            ),
+            NavPage::Settings => ("Settings", "Tune Chromia to your taste", "settings", false),
         };
         self.header_label.set_label(title);
         self.subheader_label.set_label(subtitle);
         self.stack.set_visible_child_name(stack_name);
 
-        // Reload history whenever the user navigates to the Queue page so
-        // the list is always fresh.
+        // Reload browser grids and history whenever their page is opened so the
+        // list is always fresh after a background rescan.
+        if refresh || page == NavPage::Artists {
+            self.browser_artists.reload(BrowseKind::Artists);
+        }
+        if refresh || page == NavPage::Genres {
+            self.browser_genres.reload(BrowseKind::Genres);
+        }
         if page == NavPage::Queue {
             self.history.reload();
         }
@@ -184,5 +225,7 @@ impl Center {
     pub fn load_tracks(&self, tracks: Vec<crate::library::Track>) {
         self.album_grid.load_tracks(tracks.clone());
         self.library.load_tracks(tracks);
+        self.browser_artists.reload(BrowseKind::Artists);
+        self.browser_genres.reload(BrowseKind::Genres);
     }
 }

@@ -77,6 +77,40 @@ impl Metadata {
     }
 }
 
+/// Extracts a ReplayGain value in dB from a track's tags.
+///
+/// Prefers the track gain over the album gain. Values are clamped to a sane
+/// range so a broken tag never distorts playback catastrophically.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or is not recognised.
+pub fn replaygain_gain_db(path: &Path) -> anyhow::Result<Option<f32>> {
+    let tagged_file = read_from_path(path).map_err(anyhow::Error::from)?;
+    let Some(tag) = tagged_file.primary_tag() else {
+        return Ok(None);
+    };
+    for key in [ItemKey::ReplayGainTrackGain, ItemKey::ReplayGainAlbumGain] {
+        if let Some(value) = tag.get(key).and_then(|item| item.value().text()) {
+            if let Some(db) = parse_gain_db(value) {
+                return Ok(Some(db));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Parses a `… dB` string like `-6.51 dB` into a finite dB value.
+fn parse_gain_db(text: &str) -> Option<f32> {
+    let head = text.split_ascii_whitespace().next()?;
+    let value: f32 = head.trim().parse().ok()?;
+    if value.is_finite() && (-24.0..=24.0).contains(&value) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 /// Extracts the first embedded cover picture, if any.
 ///
 /// # Errors

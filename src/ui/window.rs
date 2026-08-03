@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use crate::audio::PlayerEvent;
 use crate::config::{
     self,
-    schema::{ThemeConfig, ThemeMode},
+    schema::{AppearanceConfig, GlassBackground, GlassMode, ThemeConfig, ThemeMode},
 };
 use crate::library::Track;
 use crate::library::database::Database;
@@ -33,13 +33,14 @@ use crate::ui::UiContext;
 use crate::ui::bottom_player::BottomPlayer;
 use crate::ui::center::Center;
 use crate::ui::right_panel::RightPanel;
-use crate::ui::sidebar::Sidebar;
+use crate::ui::sidebar::{NavPage, Sidebar};
 use crate::ui::widgets::equalizer::EqualizerWidget;
 
 /// The main window tying together the sidebar, center, right panel, bottom
 /// player and the event pump.
 pub struct ChromiaWindow {
     app_window: adw::ApplicationWindow,
+    root: gtk::Box,
     #[allow(dead_code)] // currently read for setup only; future page swaps
     sidebar: Sidebar,
     center: Rc<Center>,
@@ -49,6 +50,9 @@ pub struct ChromiaWindow {
     event_rx: Rc<RefCell<mpsc::Receiver<PlayerEvent>>>,
     scan_rx: Rc<RefCell<mpsc::Receiver<Vec<Track>>>>,
     palette: Rc<RefCell<Palette>>,
+    /// Palette extracted from the current cover in `dynamic` mode; kept across
+    /// non-dynamic theme changes so switching back restores the cover colors.
+    cover_palette: Rc<RefCell<Option<Palette>>>,
     config: Rc<RefCell<crate::config::schema::Config>>,
     database: Arc<Database>,
     rt: tokio::runtime::Handle,
@@ -75,6 +79,24 @@ impl ChromiaWindow {
                 if let Some(center) = center_weak.upgrade() {
                     center.set_page(page);
                 }
+            });
+        }
+
+        // Opening a playlist replaces the center track list with the playlist's
+        // tracks and jumps to the Library page.
+        {
+            let center = center.clone();
+            let database = ctx.database.clone();
+            sidebar.connect_playlist_open(move |id| {
+                let tracks = match database.playlist_tracks(id) {
+                    Ok(tracks) => tracks,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to open playlist");
+                        return;
+                    }
+                };
+                center.load_tracks(tracks);
+                center.set_page(NavPage::Library);
             });
         }
 
@@ -126,6 +148,7 @@ impl ChromiaWindow {
 
         let palette = resolve_initial_palette(&ctx.config.borrow().theme);
         let palette = Rc::new(RefCell::new(palette));
+        let cover_palette = Rc::new(RefCell::new(None));
 
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::PreferDark);
         // The legacy GtkSettings dark flag triggers a libadwaita warning; the
@@ -144,6 +167,7 @@ impl ChromiaWindow {
 
         let window = Rc::new(Self {
             app_window,
+            root,
             sidebar,
             center,
             right_panel,
@@ -152,6 +176,7 @@ impl ChromiaWindow {
             event_rx: ctx.event_rx.clone(),
             scan_rx: Rc::new(RefCell::new(scan_rx)),
             palette,
+            cover_palette,
             config: ctx.config.clone(),
             database: ctx.database.clone(),
             rt: ctx.rt.clone(),
@@ -160,6 +185,32 @@ impl ChromiaWindow {
         if let Err(err) = css::apply_css(&css::full_css(&window.palette.borrow())) {
             tracing::warn!(error = %err, "could not apply theme css");
         }
+
+        // Register the live theme re-apply hook used by the Settings page. The
+        // window clones a weak ref so it never outlives the panels.
+        {
+            let weak = Rc::downgrade(&window);
+            *ctx.theme_applier.borrow_mut() = Some(Rc::new(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.reapply_theme();
+                }
+            }));
+        }
+
+        // Register the live appearance re-apply hook (Glass UI, animations,
+        // blur, border radius). The Settings page calls this after mutating
+        // `config.appearance` so the UI updates without a restart.
+        {
+            let weak = Rc::downgrade(&window);
+            *ctx.appearance_applier.borrow_mut() = Some(Rc::new(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.apply_appearance();
+                }
+            }));
+        }
+
+        // Apply the appearance state that was loaded from disk on startup.
+        window.apply_appearance();
 
         window.start_event_pump();
         window
@@ -234,6 +285,7 @@ impl ChromiaWindow {
         let thumbnail = track.thumbnail.clone();
         let cache_dir = config::expand_path(&self.config.borrow().paths.cache_dir);
         let palette = self.palette.clone();
+        let cover_palette = self.cover_palette.clone();
         let rt = self.rt.clone();
         glib::MainContext::default().spawn_local(async move {
             let bytes = if !local_path.as_os_str().is_empty() {
@@ -266,10 +318,90 @@ impl ChromiaWindow {
                 return;
             };
             *palette.borrow_mut() = next.clone();
+            *cover_palette.borrow_mut() = Some(next.clone());
+            *cover_palette.borrow_mut() = Some(next.clone());
             if let Err(err) = css::apply_css(&css::full_css(&next)) {
                 tracing::warn!(error = %err, "could not apply dynamic theme");
             }
         });
+    }
+
+    /// Re-applies the resolved theme from the current config.
+    ///
+    /// Called live from the Settings page via the [`ThemeApplier`] hook. In
+    /// `catppuccin` / `custom` mode the palette is recomputed from config; in
+    /// `dynamic` mode the last cover palette is kept when one exists
+    /// (falling back to Catppuccin before any cover is extracted).
+    fn reapply_theme(&self) {
+        let mode = self.config.borrow().theme.mode;
+        let resolved = match mode {
+            ThemeMode::Dynamic => match self.cover_palette.borrow().clone() {
+                Some(cover) => cover,
+                None => palette_for(
+                    self.config.borrow().theme.catppuccin.flavor,
+                    &self.config.borrow().theme.catppuccin.accent,
+                ),
+            },
+            ThemeMode::Catppuccin => palette_for(
+                self.config.borrow().theme.catppuccin.flavor,
+                &self.config.borrow().theme.catppuccin.accent,
+            ),
+            ThemeMode::Custom => Palette::from_custom(&self.config.borrow().theme.custom),
+        };
+        *self.palette.borrow_mut() = resolved.clone();
+        if let Err(err) = css::apply_css(&css::full_css(&resolved)) {
+            tracing::warn!(error = %err, "could not re-apply theme css");
+        }
+    }
+
+    /// Applies the appearance knobs (Glass UI, animations, border radius,
+    /// blur) to the shell root as CSS classes plus a generated appearance
+    /// block.
+    ///
+    /// Called once at startup from the persisted config and live from the
+    /// Settings page via the [`crate::ui::ThemeApplier`] hook. Mirroring the
+    /// palette re-apply, it mutates only the shell root and re-installs the
+    /// appearance CSS.
+    fn apply_appearance(&self) {
+        let appearance: AppearanceConfig = self.config.borrow().appearance.clone();
+        let glass_on = appearance.glass && appearance.glass_mode != GlassMode::Disabled;
+        let root = &self.root;
+
+        if glass_on {
+            root.add_css_class("glass");
+        } else {
+            root.remove_css_class("glass");
+        }
+
+        if glass_on && appearance.glass_mode == GlassMode::Strong {
+            root.add_css_class("glass-strong");
+        } else {
+            root.remove_css_class("glass-strong");
+        }
+
+        if appearance.animations {
+            root.remove_css_class("no-anim");
+        } else {
+            root.add_css_class("no-anim");
+        }
+
+        // Glass surfaces tinted by the dynamic palette; `Solid` glass gives
+        // an opaque tint that needs no blur and no extra overlay.
+        if glass_on && appearance.glass_background == GlassBackground::Solid {
+            root.add_css_class("glass-solid");
+        } else {
+            root.remove_css_class("glass-solid");
+        }
+
+        if appearance.noise {
+            root.add_css_class("noise");
+        } else {
+            root.remove_css_class("noise");
+        }
+
+        if let Err(err) = css::apply_css(&css::appearance_css(&appearance)) {
+            tracing::warn!(error = %err, "could not apply appearance css");
+        }
     }
 }
 

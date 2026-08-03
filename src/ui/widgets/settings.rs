@@ -67,6 +67,55 @@ fn combo(items: &[(&str, &str)], active_id: &str) -> gtk::ComboBoxText {
     cb
 }
 
+/// Builds a colour picker row that writes a hex string to a `CustomThemeConfig`
+/// field and live re-applies the theme.
+fn custom_color_picker(
+    config: Rc<RefCell<Config>>,
+    apply_theme: &Rc<dyn Fn()>,
+    label: &str,
+    current: String,
+    setter: impl Fn(&mut Config, String) + 'static,
+) -> gtk::Box {
+    let button = gtk::ColorButton::new();
+    button.set_rgba(&hex_to_rgba(&current));
+    button.set_tooltip_text(Some(label));
+    button.add_css_class("chromia-settings-color");
+
+    let config = config.clone();
+    let apply_theme = apply_theme.clone();
+    button.connect_color_set(move |btn| {
+        let hex = rgba_to_hex(&btn.rgba());
+        setter(&mut config.borrow_mut(), hex);
+        Settings::save_config(&config);
+        apply_theme();
+    });
+
+    setting_row(label, &button)
+}
+
+/// Converts a `#rrggbb` hex string into an opaque `RGBA` value.
+fn hex_to_rgba(hex: &str) -> gtk::gdk::RGBA {
+    let hex = hex.trim_start_matches('#');
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0);
+    gtk::gdk::RGBA::new(
+        byte(0) as f32 / 255.0,
+        byte(2) as f32 / 255.0,
+        byte(4) as f32 / 255.0,
+        1.0,
+    )
+}
+
+/// Converts an `RGBA` value back into a `#rrggbb` hex string (alpha dropped).
+fn rgba_to_hex(rgba: &gtk::gdk::RGBA) -> String {
+    let byte = |x: f32| ((x.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(rgba.red()),
+        byte(rgba.green()),
+        byte(rgba.blue())
+    )
+}
+
 // ─── Settings widget ──────────────────────────────────────────────────────────
 
 pub struct Settings {
@@ -81,6 +130,32 @@ impl Settings {
     pub fn new(ctx: &UiContext) -> Self {
         let config = ctx.config.clone();
         let command_tx = ctx.command_tx.clone();
+        let theme_applier = ctx.theme_applier.clone();
+        let apply_theme = move || {
+            if let Some(apply) = theme_applier.borrow().as_ref().cloned() {
+                apply();
+            }
+        };
+        let apply_theme: Rc<dyn Fn()> = Rc::new(apply_theme);
+
+        let appearance_applier = ctx.appearance_applier.clone();
+        let apply_appearance = move || {
+            if let Some(apply) = appearance_applier.borrow().as_ref().cloned() {
+                apply();
+            }
+        };
+        let apply_appearance: Rc<dyn Fn()> = Rc::new(apply_appearance);
+
+        let integration_control = ctx.integration_control.clone();
+        let apply_integration = {
+            let config = config.clone();
+            move || {
+                if let Some(f) = integration_control.borrow().as_ref() {
+                    let cfg = config.borrow();
+                    f(cfg.integrations.mpris, cfg.integrations.discord);
+                }
+            }
+        };
 
         let scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -119,6 +194,7 @@ impl Settings {
         );
         {
             let config = config.clone();
+            let apply_theme = apply_theme.clone();
             theme_combo.connect_changed(move |cb| {
                 let mode = match cb.active_id().as_deref() {
                     Some("dynamic") => ThemeMode::Dynamic,
@@ -128,6 +204,7 @@ impl Settings {
                 };
                 config.borrow_mut().theme.mode = mode;
                 Self::save_config(&config);
+                apply_theme();
             });
         }
         content.append(&setting_row("Theme mode", &theme_combo));
@@ -152,6 +229,7 @@ impl Settings {
         );
         {
             let config = config.clone();
+            let apply_theme = apply_theme.clone();
             flavor_combo.connect_changed(move |cb| {
                 let flavor = match cb.active_id().as_deref() {
                     Some("mocha") => Flavor::Mocha,
@@ -162,6 +240,7 @@ impl Settings {
                 };
                 config.borrow_mut().theme.catppuccin.flavor = flavor;
                 Self::save_config(&config);
+                apply_theme();
             });
         }
         content.append(&setting_row("Catppuccin flavor", &flavor_combo));
@@ -188,14 +267,69 @@ impl Settings {
         );
         {
             let config = config.clone();
+            let apply_theme = apply_theme.clone();
             accent_combo.connect_changed(move |cb| {
                 if let Some(id) = cb.active_id() {
                     config.borrow_mut().theme.catppuccin.accent = id.to_string();
                     Self::save_config(&config);
+                    apply_theme();
                 }
             });
         }
         content.append(&setting_row("Catppuccin accent", &accent_combo));
+
+        // ── Custom palette (effective in `custom` mode) ────────────────────
+        content.append(&section_header("Custom palette"));
+        let custom_hint = gtk::Label::builder()
+            .label("Used when the theme mode is set to “Custom”. Picks apply live.")
+            .css_classes(vec!["chromia-settings-hint"])
+            .halign(gtk::Align::Start)
+            .build();
+        content.append(&custom_hint);
+
+        let custom = config.borrow().theme.custom.clone();
+        content.append(&custom_color_picker(
+            config.clone(),
+            &apply_theme,
+            "Background",
+            custom.background,
+            |c, hex| c.theme.custom.background = hex,
+        ));
+        content.append(&custom_color_picker(
+            config.clone(),
+            &apply_theme,
+            "Surface",
+            custom.surface,
+            |c, hex| c.theme.custom.surface = hex,
+        ));
+        content.append(&custom_color_picker(
+            config.clone(),
+            &apply_theme,
+            "Overlay",
+            custom.overlay,
+            |c, hex| c.theme.custom.overlay = hex,
+        ));
+        content.append(&custom_color_picker(
+            config.clone(),
+            &apply_theme,
+            "Accent",
+            custom.accent,
+            |c, hex| c.theme.custom.accent = hex,
+        ));
+        content.append(&custom_color_picker(
+            config.clone(),
+            &apply_theme,
+            "Text",
+            custom.text,
+            |c, hex| c.theme.custom.text = hex,
+        ));
+        content.append(&custom_color_picker(
+            config.clone(),
+            &apply_theme,
+            "Subtext",
+            custom.subtext,
+            |c, hex| c.theme.custom.subtext = hex,
+        ));
 
         let blur_switch = gtk::Switch::builder()
             .active(config.borrow().theme.blur_background)
@@ -216,9 +350,11 @@ impl Settings {
             .build();
         {
             let config = config.clone();
+            let apply_appearance = apply_appearance.clone();
             glass_switch.connect_active_notify(move |sw| {
                 config.borrow_mut().appearance.glass = sw.is_active();
                 Self::save_config(&config);
+                apply_appearance();
             });
         }
         content.append(&setting_row("Glass UI", &glass_switch));
@@ -229,12 +365,70 @@ impl Settings {
             .build();
         {
             let config = config.clone();
+            let apply_appearance = apply_appearance.clone();
             anim_switch.connect_active_notify(move |sw| {
                 config.borrow_mut().appearance.animations = sw.is_active();
                 Self::save_config(&config);
+                apply_appearance();
             });
         }
         content.append(&setting_row("Animations", &anim_switch));
+
+        // Glass blur radius (px)
+        let blur_adj = gtk::Adjustment::new(
+            config.borrow().appearance.blur as f64,
+            0.0,
+            60.0,
+            1.0,
+            5.0,
+            0.0,
+        );
+        let blur_scale = gtk::Scale::builder()
+            .adjustment(&blur_adj)
+            .orientation(gtk::Orientation::Horizontal)
+            .draw_value(true)
+            .width_request(180)
+            .css_classes(vec!["chromia-settings-scale"])
+            .build();
+        blur_scale.set_format_value_func(|_, v| format!("{:.0} px", v));
+        {
+            let config = config.clone();
+            let apply_appearance = apply_appearance.clone();
+            blur_adj.connect_value_changed(move |adj| {
+                config.borrow_mut().appearance.blur = adj.value() as u8;
+                Self::save_config(&config);
+                apply_appearance();
+            });
+        }
+        content.append(&setting_row("Glass blur", &blur_scale));
+
+        // Corner radius (px)
+        let radius_adj = gtk::Adjustment::new(
+            config.borrow().appearance.border_radius as f64,
+            0.0,
+            32.0,
+            1.0,
+            2.0,
+            0.0,
+        );
+        let radius_scale = gtk::Scale::builder()
+            .adjustment(&radius_adj)
+            .orientation(gtk::Orientation::Horizontal)
+            .draw_value(true)
+            .width_request(180)
+            .css_classes(vec!["chromia-settings-scale"])
+            .build();
+        radius_scale.set_format_value_func(|_, v| format!("{:.0} px", v));
+        {
+            let config = config.clone();
+            let apply_appearance = apply_appearance.clone();
+            radius_adj.connect_value_changed(move |adj| {
+                config.borrow_mut().appearance.border_radius = adj.value() as u8;
+                Self::save_config(&config);
+                apply_appearance();
+            });
+        }
+        content.append(&setting_row("Corner radius", &radius_scale));
 
         // Transition duration (ms)
         let trans_val = config.borrow().theme.transition_ms as f64;
@@ -351,9 +545,11 @@ impl Settings {
             .build();
         {
             let config = config.clone();
+            let apply_integration = apply_integration.clone();
             mpris_switch.connect_active_notify(move |sw| {
                 config.borrow_mut().integrations.mpris = sw.is_active();
                 Self::save_config(&config);
+                apply_integration();
             });
         }
         content.append(&setting_row("MPRIS2 (media keys, waybar)", &mpris_switch));
@@ -364,9 +560,11 @@ impl Settings {
             .build();
         {
             let config = config.clone();
+            let apply_integration = apply_integration.clone();
             discord_switch.connect_active_notify(move |sw| {
                 config.borrow_mut().integrations.discord = sw.is_active();
                 Self::save_config(&config);
+                apply_integration();
             });
         }
         content.append(&setting_row("Discord Rich Presence", &discord_switch));

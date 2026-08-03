@@ -2,6 +2,7 @@
 
 pub mod local;
 pub mod soundcloud;
+pub mod watch;
 pub mod youtube;
 
 use std::collections::hash_map::DefaultHasher;

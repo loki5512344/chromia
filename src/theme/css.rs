@@ -4,6 +4,8 @@
 //! prepends the bundled base stylesheet; [`apply_css`] installs a stylesheet
 //! on the default display.
 
+use crate::config::schema::AppearanceConfig;
+use crate::config::schema::GlassMode;
 use crate::theme::Palette;
 
 /// Returns the bundled base stylesheet, embedded at compile time.
@@ -80,6 +82,74 @@ window {{
         subtext = palette.subtext,
         border = border,
         accent_hover = accent_hover,
+    )
+}
+
+/// Emits the appearance-driven CSS block: corner radius, blur radius and the
+/// Glass UI tint applied by the live `appearance_applier` hook.
+///
+/// Unlike the palette block, this is regenerated on every appearance change
+/// (Glass toggle, animations, blur, border radius) rather than bundled in the
+/// base sheet, because the values are numeric and configurable at runtime.
+/// It only ships translucent fills that reference the palette `@define-color`s
+/// from [`generate_css`]; `backdrop-filter` merely *enriches* those surfaces on
+/// compositors that support blur (Hyprland, KDE) and harmlessly no-ops
+/// elsewhere, keeping an opaque-ish fallback for everyone.
+pub fn appearance_css(appearance: &AppearanceConfig) -> String {
+    let radius = appearance.border_radius.max(1);
+    let blur = appearance.blur;
+    let opacity = appearance.glass_opacity.clamp(0.0, 1.0);
+    let on = appearance.glass && appearance.glass_mode != GlassMode::Disabled;
+    let strong = on && appearance.glass_mode == GlassMode::Strong;
+
+    // Strong mode dims the fill a touch more and doubles the blur for depth.
+    let (tint, glass_blur) = if strong {
+        ((opacity * 0.65).min(0.55), (blur as u16 * 2).max(28))
+    } else {
+        (opacity, blur as u16)
+    };
+
+    format!(
+        r#"/* ═══ Appearance knobs (radius / blur / glass) ═══ */
+.chromia-shell.appearance {{
+    border-radius: {radius}px;
+}}
+window.appearance {{
+    border-radius: {radius}px;
+}}
+.chromia-card,
+.chromia-slot,
+.chromia-cover,
+.chromia-album-card {{
+    border-radius: {radius}px;
+}}
+
+/* Glass is opt-in via the `.glass` root class set on the shell. */
+.chromia-shell.glass .chromia-sidebar,
+.chromia-shell.glass .chromia-right-panel,
+.chromia-shell.glass .chromia-bottom-player {{
+    background-color: alpha(@surface, {tint});
+    backdrop-filter: blur({glass_blur}px);
+}}
+.chromia-shell.glass .chromia-shell {{
+    background-color: alpha(@background, 0.78);
+}}
+.chromia-shell.glass .chromia-card,
+.chromia-shell.glass .card {{
+    background-color: alpha(@surface, {tint});
+    backdrop-filter: blur({glass_blur}px);
+}}
+
+/* Muted, hairline edges so translucent panels stay legible without blur. */
+.chromia-shell.glass .chromia-sidebar,
+.chromia-shell.glass .chromia-right-panel,
+.chromia-shell.glass .chromia-bottom-player {{
+    box-shadow: inset 0 0 0 1px alpha(white, 0.04);
+}}
+"#,
+        radius = radius,
+        tint = tint,
+        glass_blur = glass_blur,
     )
 }
 
@@ -182,5 +252,26 @@ mod tests {
     fn lighten_moves_toward_white() {
         assert_eq!(lighten("#45475a", 0.0), "#45475a");
         assert_eq!(lighten("#000000", 1.0), "#ffffff");
+    }
+
+    #[test]
+    fn appearance_css_emits_radius_and_blur() {
+        let app = crate::config::schema::AppearanceConfig {
+            glass: true,
+            glass_opacity: 0.8,
+            blur: 24,
+            noise: true,
+            glass_mode: crate::config::schema::GlassMode::Light,
+            border_radius: 16,
+            animations: true,
+            edit_mode: false,
+            follow_wallpaper: false,
+            glass_background: crate::config::schema::GlassBackground::Dynamic,
+        };
+        let css = appearance_css(&app);
+        assert!(css.contains("border-radius: 16px"));
+        assert!(css.contains("blur(24px)"));
+        assert!(css.contains("alpha(@surface"));
+        assert!(css.contains(".chromia-shell.glass"));
     }
 }

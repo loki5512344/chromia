@@ -20,26 +20,34 @@ pub const CLIENT_ID: u64 = 1_103_153_029_914_382_372;
 /// How long the worker thread sleeps between event polls.
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
-/// Marker type; the presence worker is spawned via [`Discord::spawn`].
+/// Discord type; the presence worker is spawned via [`Discord::spawn`].
 pub struct Discord;
 
 impl Discord {
     /// Spawns a dedicated thread that publishes Rich Presence. `events` is one
-    /// of the broadcast receivers fed by the audio task.
+    /// of the broadcast receivers fed by the audio task. `stop` requests a
+    /// graceful shutdown of the worker; dropping the sender (or sending `()`)
+    /// makes the loop exit.
     ///
     /// # Errors
     ///
     /// Fails if the worker thread could not be spawned.
-    pub fn spawn(events: mpsc::Receiver<PlayerEvent>) -> anyhow::Result<()> {
-        std::thread::Builder::new()
+    pub fn spawn(
+        events: mpsc::Receiver<PlayerEvent>,
+        stop: std::sync::mpsc::Receiver<()>,
+    ) -> anyhow::Result<std::thread::JoinHandle<()>> {
+        Ok(std::thread::Builder::new()
             .name("chromia-discord".into())
-            .spawn(run_presence_worker(events))?;
-        Ok(())
+            .spawn(run_presence_worker(events, stop))?)
     }
 }
 
-/// The presence worker loop. Runs until the audio task closes the channel.
-fn run_presence_worker(events: mpsc::Receiver<PlayerEvent>) -> impl FnOnce() {
+/// The presence worker loop. Runs until the audio task closes the channel or
+/// the caller requests a stop.
+fn run_presence_worker(
+    events: mpsc::Receiver<PlayerEvent>,
+    stop: std::sync::mpsc::Receiver<()>,
+) -> impl FnOnce() {
     move || {
         let mut events = events;
         let mut client = Client::new(CLIENT_ID);
@@ -49,6 +57,12 @@ fn run_presence_worker(events: mpsc::Receiver<PlayerEvent>) -> impl FnOnce() {
         let mut start_ms: u64 = now_ms();
 
         loop {
+            if matches!(
+                stop.try_recv(),
+                Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ) {
+                break;
+            }
             match events.try_recv() {
                 Ok(PlayerEvent::TrackStarted(new_track)) => {
                     track = Some(new_track);

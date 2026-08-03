@@ -8,3 +8,6 @@ pub mod lyrics;
 pub mod player;
 pub mod queue;
 pub mod settings;
+
+pub mod browser;
+pub mod visualizer;

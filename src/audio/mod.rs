@@ -4,6 +4,7 @@
 //! flows through [`PlayerCommand`] sent over a `tokio::sync::mpsc` channel to a
 //! background task; playback events travel back as [`PlayerEvent`].
 
+pub mod dsp;
 pub mod equalizer;
 pub mod player;
 pub mod queue;

@@ -1,6 +1,9 @@
-//! Equalizer model: per-band gain configuration with named presets.
+//! Equalizer: per-band gain configuration with named presets.
 //!
-//! The model only tracks gains and preset state; the actual DSP is deferred.
+//! The model stores gains/preset state and exposes them through a shared
+//! [`EqHandle`] that the real DSP source reads live from the playback thread.
+
+use crate::audio::dsp::{EqHandle, new_eq};
 
 /// Number of equalizer bands.
 pub const BANDS: usize = 10;
@@ -54,21 +57,20 @@ pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
 
-/// Per-band gain model.
+/// Per-band gain model that shares its state with the DSP source.
 pub struct Equalizer {
-    gains: [f32; BANDS],
-    enabled: bool,
+    params: EqHandle,
 }
 
 impl Equalizer {
     /// Creates an equalizer with all bands flat and DSP disabled.
-    ///
-    // TODO(loki): apply biquad filter chain as a rodio Source wrapper.
     pub fn new() -> Self {
-        Self {
-            gains: [0.0; BANDS],
-            enabled: false,
-        }
+        Self { params: new_eq() }
+    }
+
+    /// Returns a handle to the shared live parameters used by the DSP source.
+    pub fn handle(&self) -> EqHandle {
+        self.params.clone()
     }
 
     /// Sets a single band's gain in dB, clamped to the supported range.
@@ -76,7 +78,8 @@ impl Equalizer {
         if index >= BANDS {
             return;
         }
-        self.gains[index] = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        let mut params = self.params.lock();
+        params.gains[index] = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
     }
 
     /// Gain of a band in dB; `0.0` for out-of-range indices.
@@ -85,7 +88,7 @@ impl Equalizer {
         if index >= BANDS {
             0.0
         } else {
-            self.gains[index]
+            self.params.lock().gains[index]
         }
     }
 
@@ -93,7 +96,7 @@ impl Equalizer {
     pub fn set_preset(&mut self, name: &str) -> bool {
         for preset in PRESETS {
             if preset.name == name {
-                self.gains = preset.gains;
+                self.params.lock().gains = preset.gains;
                 return true;
             }
         }
@@ -102,19 +105,26 @@ impl Equalizer {
 
     /// Enables or disables the equalizer.
     pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
+        self.params.lock().enabled = enabled;
     }
 
     /// Whether the equalizer is enabled.
     #[allow(dead_code)] // exercised by tests, used by a future settings UI
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        self.params.lock().enabled
     }
 
     /// Snapshot of all band gains in dB.
     #[allow(dead_code)] // exercised by tests, used by a future settings UI
     pub fn gains(&self) -> [f32; BANDS] {
-        self.gains
+        self.params.lock().gains
+    }
+
+    /// Applies a linear pre-gain (used for ReplayGain); 1.0 disables.
+    pub fn set_pre_gain(&mut self, linear: f32) {
+        if linear.is_finite() && linear > 0.0 {
+            self.params.lock().pre_gain = linear;
+        }
     }
 }
 

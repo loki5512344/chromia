@@ -453,6 +453,124 @@ impl Database {
             .context("failed to read playlist tracks")
     }
 
+    // ── Library browser ─────────────────────────────────────────────────────
+
+    /// Removes every local track whose path is not in `keep`. Used by the
+    /// folder watcher to prune tracks deleted from disk.
+    ///
+    /// Returns the number of removed rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delete fails.
+    pub fn prune_local_except(&self, keep: &[PathBuf]) -> anyhow::Result<usize> {
+        let conn = self.conn.lock();
+        let keep: Vec<String> = keep
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let source = SourceKind::Local.to_string();
+        if keep.is_empty() {
+            let n = conn
+                .execute("DELETE FROM tracks WHERE source = ?1", params![source])
+                .context("failed to prune removed local tracks")?;
+            return Ok(n);
+        }
+        let placeholders = vec!["?"; keep.len()].join(", ");
+        let sql = format!("DELETE FROM tracks WHERE source = ?1 AND path NOT IN ({placeholders})");
+        let n = conn
+            .execute(
+                &sql,
+                params_from_iter(
+                    std::iter::once(source.as_str()).chain(keep.iter().map(String::as_str)),
+                ),
+            )
+            .context("failed to prune removed local tracks")?;
+        Ok(n)
+    }
+
+    /// Returns artist names with track counts, most prolific first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query fails.
+    pub fn grouped_artists(&self) -> anyhow::Result<Vec<(String, usize)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT artist, COUNT(*) FROM tracks
+                 WHERE artist <> ''
+                 GROUP BY artist
+                 ORDER BY COUNT(*) DESC, artist ASC",
+            )
+            .context("failed to prepare grouped_artists statement")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read artists")
+    }
+
+    /// Groups genres with track counts, most frequent first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query fails.
+    pub fn grouped_genres(&self) -> anyhow::Result<Vec<(String, usize)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT genre, COUNT(*) FROM tracks
+                 WHERE genre IS NOT NULL AND genre <> ''
+                 GROUP BY genre
+                 ORDER BY COUNT(*) DESC, genre ASC",
+            )
+            .context("failed to prepare grouped_genres statement")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read genres")
+    }
+
+    /// Loads every track by `artist`, ordered by album then track number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query fails.
+    pub fn tracks_by_artist(&self, artist: &str) -> anyhow::Result<Vec<Track>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM tracks
+                 WHERE artist = ?1
+                 ORDER BY album, year, disc_no, track_no, title"
+            ))
+            .context("failed to prepare tracks_by_artist statement")?;
+        let rows = stmt.query_map(params![artist], track_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read artist tracks")
+    }
+
+    /// Loads every track of `genre`, ordered by album then track number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query fails.
+    pub fn tracks_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Track>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM tracks
+                 WHERE genre = ?1
+                 ORDER BY album, year, disc_no, track_no, title"
+            ))
+            .context("failed to prepare tracks_by_genre statement")?;
+        let rows = stmt.query_map(params![genre], track_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read genre tracks")
+    }
+
     // ── History ─────────────────────────────────────────────────────────────
 
     /// Records that `track_id` was played at this moment.
@@ -769,5 +887,60 @@ mod tests {
 
         db.clear_history().expect("clear");
         assert!(db.recent_history(10).expect("recent").is_empty());
+    }
+
+    #[test]
+    fn prune_local_except_removes_missing_files_only() {
+        let dir = tempdir().expect("tempdir");
+        let db = Database::open(&dir.path().join("library.db")).expect("open database");
+
+        let a = db
+            .upsert_track(&sample_track("Keep", "Artist", "Album"))
+            .expect("upsert a");
+        let b = db
+            .upsert_track(&sample_track("Gone", "Artist", "Album"))
+            .expect("upsert b");
+
+        // Remote tracks are never pruned by local-path updates.
+        let remote = db
+            .upsert_track(&remote_track("https://x/y"))
+            .expect("upsert remote");
+
+        let pruned = db
+            .prune_local_except(std::slice::from_ref(&a.path))
+            .expect("prune");
+        assert_eq!(pruned, 1, "only the missing local track should be removed");
+
+        assert!(db.get_track(a.id).expect("get a").is_some());
+        assert!(db.get_track(b.id).expect("get b").is_none());
+        assert!(db.get_track(remote.id).expect("get remote").is_some());
+    }
+
+    #[test]
+    fn browser_groups_by_artist_and_genre() {
+        let dir = tempdir().expect("tempdir");
+        let db = Database::open(&dir.path().join("library.db")).expect("open database");
+
+        db.upsert_track(&sample_track("S1", "Alice", "Album A"))
+            .expect("u1");
+        db.upsert_track(&sample_track("S2", "Alice", "Album B"))
+            .expect("u2");
+        db.upsert_track(&sample_track("S3", "Bob", "Album C"))
+            .expect("u3");
+
+        let artists = db.grouped_artists().expect("artists");
+        assert_eq!(
+            artists,
+            vec![("Alice".to_string(), 2), ("Bob".to_string(), 1)]
+        );
+
+        let genres = db.grouped_genres().expect("genres");
+        assert!(genres.contains(&("Rock".to_string(), 3)));
+
+        let artist_tracks = db.tracks_by_artist("Alice").expect("artist tracks");
+        assert_eq!(artist_tracks.len(), 2);
+
+        let genre_tracks = db.tracks_by_genre("Rock").expect("genre tracks");
+        assert_eq!(genre_tracks.len(), 3);
     }
 }

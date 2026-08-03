@@ -10,6 +10,17 @@
 //! The DnD flow is gated by `appearance.edit_mode` so it never gets in the
 //! way of normal listening. When `edit_mode` is `false` the slots behave
 //! exactly like in iteration 1.
+//!
+//! **Config sync (v1.1):** the panel is now a first-class consumer of the
+//! `[layout.right_panel]` config section:
+//!
+//! - The initial slot order comes from `config.layout.right_panel.slots`
+//!   (falls back to [`default_slots`] when empty / not configured).
+//! - The `Edit layout` toggle reads and writes `config.appearance.edit_mode`.
+//! - In edit mode a palette row lets the user append widgets from the full
+//!   [`SlotWidget::all`] catalogue.
+//! - Reordering via drag-and-drop and palette additions are persisted back to
+//!   `config.layout.right_panel.slots`, so layout survives a restart.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -19,14 +30,15 @@ use gtk::gdk::ContentProvider;
 use gtk::prelude::*;
 
 use crate::audio::PlayerEvent;
-use crate::config::schema::AppearanceConfig;
+use crate::config::schema::{AppearanceConfig, Config};
 use crate::ui::UiContext;
-use crate::ui::layout::slots::{SlotWidget, default_slots};
+use crate::ui::layout::slots::{SlotWidget, default_slots, parse_slots};
 use crate::ui::widgets::album_art::AlbumArt;
 use crate::ui::widgets::audio_info::AudioInfo;
 use crate::ui::widgets::equalizer::EqualizerWidget;
 use crate::ui::widgets::lyrics::Lyrics;
 use crate::ui::widgets::queue::Queue as QueueWidget;
+use crate::ui::widgets::visualizer::Visualizer;
 
 /// String payload shipped through the drag-and-drop channel.
 type SlotPayload = String;
@@ -37,11 +49,13 @@ struct SharedState {
     root: gtk::Box,
     slots: RefCell<Vec<SlotWidget>>,
     edit_mode: RefCell<bool>,
+    config: Rc<RefCell<Config>>,
     album_art: AlbumArt,
     lyrics: Lyrics,
     queue: QueueWidget,
     equalizer: EqualizerWidget,
     audio_info: AudioInfo,
+    visualizer: Visualizer,
 }
 
 /// The right-panel container hosting the customizable vertical slot stack.
@@ -52,6 +66,16 @@ pub struct RightPanel {
 impl RightPanel {
     /// Builds the right panel using the layout stored in `ctx.config`.
     pub fn new(ctx: &UiContext) -> Self {
+        // The slot order is user-configurable via `[layout.right_panel]`.
+        // Unknown / empty lists fall back to the curated defaults so the
+        // panel always renders something useful.
+        let configured = parse_slots(&ctx.config.borrow().layout.right_panel.slots.clone());
+        let slots = if configured.is_empty() {
+            default_slots()
+        } else {
+            configured
+        };
+
         let state = Rc::new(SharedState {
             root: gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
@@ -60,13 +84,15 @@ impl RightPanel {
                 .hexpand(true)
                 .vexpand(true)
                 .build(),
-            slots: RefCell::new(default_slots()),
+            slots: RefCell::new(slots),
             edit_mode: RefCell::new(ctx.config.borrow().appearance.edit_mode),
+            config: ctx.config.clone(),
             album_art: AlbumArt::new(ctx),
             lyrics: Lyrics::new(ctx),
             queue: QueueWidget::new(ctx),
             equalizer: EqualizerWidget::new(ctx),
             audio_info: AudioInfo::new(ctx),
+            visualizer: Visualizer::new(ctx),
         });
 
         rebuild(&state);
@@ -85,10 +111,13 @@ impl RightPanel {
         self.state.slots.borrow().clone()
     }
 
-    /// Replaces the slot order and rebuilds the panel.
-    #[allow(dead_code)] // TODO(loki): consumed by the config sync layer
+    /// Replaces the slot order and rebuilds the panel, persisting the change
+    /// back to `[layout.right_panel]`. Reserved for programmatic layout
+    /// changes (the layout editor uses DnD + the palette instead).
+    #[allow(dead_code)]
     pub fn set_slots(&self, slots: Vec<SlotWidget>) {
         *self.state.slots.borrow_mut() = slots;
+        persist_slots(&self.state);
         rebuild(&self.state);
     }
 
@@ -153,6 +182,9 @@ fn rebuild(state: &Rc<SharedState>) {
             move |btn| {
                 let next = btn.is_active();
                 *state_for_toggle.edit_mode.borrow_mut() = next;
+                // Persist the toggle so it survives a restart.
+                state_for_toggle.config.borrow_mut().appearance.edit_mode = next;
+                persist_config(&state_for_toggle);
                 rebuild(&state_for_toggle);
             }
         ));
@@ -165,6 +197,13 @@ fn rebuild(state: &Rc<SharedState>) {
         state.root.append(&toggle_row);
     }
 
+    // Layout-editor palette — only in edit mode. Offers the full widget
+    // catalogue so the user can append any slot, not just reorder the ones
+    // that exist by default.
+    if *state.edit_mode.borrow() {
+        state.root.append(&palette_row(state));
+    }
+
     let slots = state.slots.borrow().clone();
     let edit_mode = *state.edit_mode.borrow();
     for slot in slots {
@@ -173,6 +212,7 @@ fn rebuild(state: &Rc<SharedState>) {
             SlotWidget::Lyrics => state.lyrics.root(),
             SlotWidget::Queue => state.queue.root(),
             SlotWidget::Equalizer => state.equalizer.root(),
+            SlotWidget::Visualizer => state.visualizer.root(),
             // Future slots fall through silently — see CHROMIA.md roadmap.
             _ => continue,
         };
@@ -195,6 +235,80 @@ fn rebuild(state: &Rc<SharedState>) {
         }
 
         state.root.append(&wrapper);
+    }
+}
+
+/// Builds the edit-mode palette row: a dropdown of every catalogued widget
+/// plus an "Add" button that appends the chosen widget to the slot stack.
+fn palette_row(state: &Rc<SharedState>) -> gtk::Box {
+    static ADD_INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    let names: Vec<&str> = SlotWidget::all().iter().map(|w| w.as_str()).collect();
+    let dropdown = gtk::DropDown::from_strings(&names);
+    dropdown.set_selected(
+        ADD_INDEX
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .min(names.len().saturating_sub(1)) as u32,
+    );
+    dropdown.add_css_class("chromia-palette-dropdown");
+
+    let add = gtk::Button::builder()
+        .label("Add widget")
+        .css_classes(vec!["chromia-palette-add"])
+        .build();
+
+    let state_for_add = state.clone();
+    let catalogue = dynamic_catalogue();
+    let dropdown_in_click = dropdown.clone();
+    add.connect_clicked(move |_| {
+        let index = dropdown_in_click.selected() as usize;
+        let Some(widget) = catalogue.get(index).copied() else {
+            return;
+        };
+        ADD_INDEX.store(index, std::sync::atomic::Ordering::Relaxed);
+        // Ignore duplicates: a widget can only occupy one slot.
+        {
+            let mut slots = state_for_add.slots.borrow_mut();
+            if !slots.contains(&widget) {
+                slots.push(widget);
+            }
+        }
+        persist_slots(&state_for_add);
+        rebuild(&state_for_add);
+    });
+
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .css_classes(vec!["chromia-palette"])
+        .margin_bottom(6)
+        .build();
+    row.append(&dropdown);
+    row.append(&add);
+    row
+}
+
+/// A stable catalogue snapshot order matching [`SlotWidget::all`].
+fn dynamic_catalogue() -> Vec<SlotWidget> {
+    SlotWidget::all().to_vec()
+}
+
+/// Persists the current slot order into `config.layout.right_panel.slots`.
+fn persist_slots(state: &Rc<SharedState>) {
+    let names: Vec<String> = state
+        .slots
+        .borrow()
+        .iter()
+        .map(|w| w.as_str().to_string())
+        .collect();
+    state.config.borrow_mut().layout.right_panel.slots = names;
+    persist_config(state);
+}
+
+/// Writes the shared config back to disk, swallowing I/O errors.
+fn persist_config(state: &Rc<SharedState>) {
+    if let Err(err) = state.config.borrow().save() {
+        tracing::warn!(error = %err, "could not persist layout config");
     }
 }
 
@@ -292,6 +406,7 @@ fn wire_drop_target(wrapper: &gtk::Box, slot: SlotWidget, state: Rc<SharedState>
                 .unwrap_or(current.len());
             current.insert(target_index, dragged);
         }
+        persist_slots(&state);
         // Schedule the rebuild for the next idle tick so the current
         // event dispatch finishes before we destroy the wrapper that owns
         // this DropTarget.

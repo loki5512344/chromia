@@ -6,11 +6,13 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rodio::{Decoder, OutputStream, Sink, Source};
 use tokio::sync::mpsc;
 
+use crate::audio::dsp::{EqualizerSource, Spectrum};
 use crate::audio::equalizer::Equalizer;
 use crate::audio::queue::Queue;
 use crate::audio::{PlaybackState, PlayerCommand, PlayerEvent, RepeatMode};
@@ -29,10 +31,13 @@ pub struct PlayerSettings {
     pub quality: String,
     /// Initial playback volume, 0.0-1.0.
     pub volume: f32,
-    /// Crossfade length between tracks, in ms (reserved).
+    /// Crossfade length between tracks, in ms (0 disables).
     pub crossfade_ms: u32,
-    /// Whether ReplayGain normalisation is applied (reserved).
+    /// Whether ReplayGain normalisation is applied.
     pub replaygain: bool,
+    /// Optional shared spectrum accumulator fed by the playback source; the UI
+    /// visualizer reads it. `None` disables the live analyser.
+    pub spectrum: Option<Arc<::parking_lot::Mutex<Spectrum>>>,
 }
 
 /// Opaque handle to the audio engine.
@@ -255,8 +260,31 @@ impl Engine {
         let duration = decoder.total_duration();
         self.appended_duration = duration.unwrap_or(Duration::ZERO);
         self.failed_tracks = 0;
+
+        // Build the DSP-wrapped playback source: ReplayGain pre-gain, the live
+        // equalizer chain, an optional crossfade head ramp, and the spectrum
+        // feed all live inside a single rodio `Source`.
+        let replaygain_linear = if self.settings.replaygain {
+            crate::library::metadata::replaygain_gain_db(&path)
+                .ok()
+                .flatten()
+                .map(|db| 10f32.powf(db / 20.0))
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        self.equalizer.set_pre_gain(replaygain_linear);
+
+        let spectrum = self.settings.spectrum.clone();
+        if let Some(spec) = &spectrum {
+            spec.lock().reset();
+        }
+        let mut source =
+            EqualizerSource::new(decoder.convert_samples(), self.equalizer.handle(), spectrum);
+        source.crossfade_secs(self.settings.crossfade_ms as f32 / 1000.0);
+
         self.sink.clear();
-        self.sink.append(decoder);
+        self.sink.append(source);
         self.sink.play();
         self.has_sound = true;
         self.state = PlaybackState::Playing;
@@ -318,8 +346,14 @@ impl Engine {
         };
         match Decoder::new(BufReader::new(file)) {
             Ok(decoder) => {
+                let spectrum = self.settings.spectrum.clone();
+                let source = EqualizerSource::new(
+                    decoder.convert_samples(),
+                    self.equalizer.handle(),
+                    spectrum,
+                );
                 self.sink.clear();
-                self.sink.append(decoder);
+                self.sink.append(source);
                 self.sink.play();
                 self.has_sound = true;
                 self.state = PlaybackState::Playing;
