@@ -86,17 +86,25 @@ impl AlbumArt {
 
     /// Applies a playback event to the widget state.
     pub fn update(&self, event: &PlayerEvent) {
-        if let PlayerEvent::TrackStarted(track) = event {
-            self.title_label.set_text(&track.title);
-            let subtitle = if track.artist.is_empty() {
-                track.album.clone()
-            } else if track.album.is_empty() {
-                track.artist.clone()
-            } else {
-                format!("{} — {}", track.artist, track.album)
-            };
-            self.subtitle_label.set_text(&subtitle);
-            self.load_cover(track);
+        match event {
+            PlayerEvent::TrackStarted(track) => {
+                self.title_label.set_text(&track.title);
+                let subtitle = if track.artist.is_empty() {
+                    track.album.clone()
+                } else if track.album.is_empty() {
+                    track.artist.clone()
+                } else {
+                    format!("{} — {}", track.artist, track.album)
+                };
+                self.subtitle_label.set_text(&subtitle);
+                self.load_cover(track);
+            }
+            PlayerEvent::Loading(title) => {
+                self.title_label.set_text("Loading stream…");
+                self.subtitle_label.set_text(title);
+                self.show_fallback();
+            }
+            _ => {}
         }
     }
 

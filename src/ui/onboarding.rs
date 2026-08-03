@@ -229,6 +229,7 @@ fn build_settings_expander(
     let initial = match config.borrow().theme.mode {
         ThemeMode::Dynamic => 0,
         ThemeMode::Catppuccin => 1,
+        ThemeMode::Preset => 0,
         ThemeMode::Custom => 2,
     };
     theme_dropdown.set_selected(initial);

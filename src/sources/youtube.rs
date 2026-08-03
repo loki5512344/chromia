@@ -25,9 +25,9 @@ impl YoutubeSource {
         }
     }
 
-    /// Runs a YouTube search and returns up to 25 matching tracks.
+    /// Runs a YouTube search and returns up to 10 matching tracks.
     pub async fn search(&self, query: &str) -> Result<Vec<Track>> {
-        let query_arg = format!("ytsearch25:{query}");
+        let query_arg = format!("ytsearch10:{query}");
         let stdout = run_ytdlp(&["--flat-playlist", "-J", query_arg.as_str()]).await?;
         let stdout = String::from_utf8_lossy(&stdout);
         Ok(parse_search_response(stdout.as_ref(), SourceKind::Youtube))

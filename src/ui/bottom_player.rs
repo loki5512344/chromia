@@ -218,7 +218,6 @@ impl BottomPlayer {
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
             .halign(gtk::Align::Center)
-            .hexpand(true)
             .valign(gtk::Align::Center)
             .build();
         center.append(&progress_row);
@@ -228,6 +227,7 @@ impl BottomPlayer {
             .orientation(gtk::Orientation::Horizontal)
             .spacing(10)
             .halign(gtk::Align::End)
+            .hexpand(true)
             .build();
         right.append(&info_extra);
         right.append(&preset_combo);
@@ -414,6 +414,34 @@ impl BottomPlayer {
             move |combo| apply_state(combo.selected())
         ));
 
+        // Responsive layout: GTK CSS has no width media queries and the
+        // `size-allocate` signal is not bound in this gtk4-rs version, so poll
+        // the bar width on a slow timer and hide the optional preset selector /
+        // info pills on narrow windows.
+        {
+            let preset_combo = preset_combo.clone();
+            let info_extra = info_extra.clone();
+            let root_widget = root.clone().upcast::<gtk::Widget>();
+            glib::timeout_add_local(Duration::from_millis(250), clone!(
+                #[strong]
+                preset_combo,
+                #[strong]
+                info_extra,
+                #[strong]
+                root_widget,
+                move || {
+                    let narrow = root_widget.width() < 900;
+                    if preset_combo.is_visible() == narrow {
+                        preset_combo.set_visible(!narrow);
+                    }
+                    if info_extra.is_visible() == narrow {
+                        info_extra.set_visible(!narrow);
+                    }
+                    glib::ControlFlow::Continue
+                }
+            ));
+        }
+
         Self {
             root,
             cover,
@@ -502,6 +530,13 @@ impl BottomPlayer {
             PlayerEvent::RepeatChanged(m) => {
                 self.repeat_mode.set(*m);
                 self.repeat_button.set_active(*m != RepeatMode::Off);
+            }
+            PlayerEvent::Loading(title) => {
+                self.title_label.set_text("Loading…");
+                self.artist_label.set_text(&format!("Streaming {title}"));
+                self.play_icon
+                    .set_icon_name(Some("media-playback-start-symbolic"));
+                self.play_button.set_active(true);
             }
             PlayerEvent::TrackEnded
             | PlayerEvent::QueueChanged(_)

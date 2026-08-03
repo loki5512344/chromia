@@ -102,11 +102,16 @@ pub fn appearance_css(appearance: &AppearanceConfig) -> String {
     let on = appearance.glass && appearance.glass_mode != GlassMode::Disabled;
     let strong = on && appearance.glass_mode == GlassMode::Strong;
 
-    // Strong mode dims the fill a touch more and doubles the blur for depth.
+    // Translucent fill so the desktop (or Hyprland's blur layerrule) actually
+    // shows through. The opacity is scaled down from the user's knob so panels
+    // read as glass instead of a near-solid bar; Strong mode dims further.
     let (tint, glass_blur) = if strong {
-        ((opacity * 0.65).min(0.55), (blur as u16 * 2).max(28))
+        (
+            (opacity * 0.28).clamp(0.10, 0.24),
+            (blur as u16 * 2).max(28),
+        )
     } else {
-        (opacity, blur as u16)
+        ((opacity * 0.40).clamp(0.15, 0.32), blur as u16)
     };
 
     format!(
@@ -122,6 +127,15 @@ window.appearance {{
 .chromia-cover,
 .chromia-album-card {{
     border-radius: {radius}px;
+}}
+
+/* Translucent glass: clear the window and shell backgrounds so the desktop
+   shows through the alpha-fill panels. */
+window.glass-transparent {{
+    background-color: transparent;
+}}
+.chromia-shell.glass-transparent {{
+    background-color: alpha(@background, 0.12);
 }}
 
 /* Glass is opt-in via the `.glass` root class set on the shell. */
@@ -161,7 +175,7 @@ window.appearance {{
 /// initialized main thread and the provider is otherwise not thread-safe.
 /// Returns an error when no display is available (e.g. headless runs).
 #[allow(deprecated)] // `load_from_data` is deprecated since GTK 4.12; still the
-// documented API for string CSS in gtk4 0.11.
+                     // documented API for string CSS in gtk4 0.11.
 pub fn apply_css(css: &str) -> anyhow::Result<()> {
     let provider = gtk::CssProvider::new();
     provider.load_from_data(css);

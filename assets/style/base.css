@@ -17,8 +17,9 @@ window {
     font-feature-settings: "ss01", "cv01", "cv02";
 }
 
-/* Smooth color transitions for dynamic theme switches. */
-window,
+/* Smooth color transitions for dynamic theme switches.
+   NOTE: `window` must NOT be transitioned — a transition on the toplevel's
+   background keeps the window surface opaque, which breaks the Glass UI. */
 .chromia-shell,
 .chromia-sidebar,
 .chromia-bottom-player,
@@ -790,8 +791,8 @@ paned > separator:active {
 /* ─── Reduced motion: kill transitions/animation when animations are off ── */
 .chromia-shell.no-anim *,
 .chromia-shell.no-anim {
-    transition: none !important;
-    animation: none !important;
+    transition: none;
+    animation: none;
 }
 
 /* ─── Scrollbars (subtle, Spotify-like) ─────────────────────────────────── */

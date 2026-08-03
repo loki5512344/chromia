@@ -109,11 +109,16 @@ fn build_logo() -> gtk::Box {
     let mark = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .css_classes(vec!["chromia-logo-mark"])
+        .width_request(38)
+        .height_request(38)
+        .valign(gtk::Align::Center)
         .build();
 
     let inner = gtk::Label::builder()
         .label("C")
         .css_classes(vec!["chromia-logo-letter"])
+        .width_request(38)
+        .height_request(38)
         .valign(gtk::Align::Center)
         .halign(gtk::Align::Center)
         .build();

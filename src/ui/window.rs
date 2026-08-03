@@ -12,23 +12,24 @@
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gio::prelude::*;
 use gtk::prelude::*;
 use tokio::sync::mpsc;
 
 use crate::audio::PlayerEvent;
 use crate::config::{
     self,
-    schema::{AppearanceConfig, GlassBackground, GlassMode, ThemeConfig, ThemeMode},
+    schema::{AppearanceConfig, Flavor, GlassBackground, GlassMode, ThemeConfig, ThemeMode},
 };
 use crate::library::Track;
 use crate::library::database::Database;
 use crate::theme::css;
-use crate::theme::{Palette, palette_for, palette_from_image};
+use crate::theme::{Palette, palette_for, palette_from_image, resolve_preset};
 use crate::ui::UiContext;
 use crate::ui::bottom_player::BottomPlayer;
 use crate::ui::center::Center;
@@ -65,6 +66,10 @@ impl ChromiaWindow {
         ctx: &UiContext,
         scan_rx: mpsc::Receiver<Vec<Track>>,
     ) -> Rc<Self> {
+        // Size the default window to fit the current screen instead of assuming
+        // a 1280x820 desktop; falls back to the requested size headlessly.
+        let (default_width, default_height) = fit_to_monitor(1280, 820);
+
         let sidebar = Sidebar::new(ctx);
         let center = Rc::new(Center::new(ctx));
         let right_panel = RightPanel::new(ctx);
@@ -102,14 +107,14 @@ impl ChromiaWindow {
 
         let body_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         body_paned.set_start_child(Some(&sidebar.root()));
-        body_paned.set_position(220);
+        body_paned.set_position(sidebar_position(default_width));
         body_paned.set_resize_start_child(false);
         body_paned.set_shrink_start_child(false);
 
         let center_right = gtk::Paned::new(gtk::Orientation::Horizontal);
         center_right.set_start_child(Some(&center.root()));
         center_right.set_end_child(Some(&right_panel.root()));
-        center_right.set_position(560);
+        center_right.set_position(right_panel_position(default_width));
         center_right.set_hexpand(true);
         center_right.set_vexpand(true);
         center_right.set_resize_end_child(false);
@@ -160,10 +165,47 @@ impl ChromiaWindow {
         let app_window = adw::ApplicationWindow::builder()
             .application(app)
             .title("Chromia")
-            .default_width(1280)
-            .default_height(820)
+            .default_width(default_width)
+            .default_height(default_height)
             .content(&root)
             .build();
+
+        // The paned handles are placed from the window's *real* width so the
+        // layout adapts to the actual screen. The size may not be known at
+        // `present()` time, so we wait until the window is realized and reports
+        // a width, then apply the positions exactly once — later resizes (the
+        // user dragging the splitter, maximising, …) are never overridden.
+        let paned_positions_set = Cell::new(false);
+        {
+            let body_paned = body_paned.clone();
+            let center_right = center_right.clone();
+            app_window.connect_realize(move |win| {
+                let win = win.clone();
+                let body_paned = body_paned.clone();
+                let center_right = center_right.clone();
+                let paned_positions_set = paned_positions_set.clone();
+                glib::idle_add_local(move || {
+                    if paned_positions_set.get() {
+                        return glib::ControlFlow::Break;
+                    }
+                    let width = win.width();
+                    if width <= 0 {
+                        return glib::ControlFlow::Continue;
+                    }
+                    paned_positions_set.set(true);
+                    // `gtk::Paned` positions are measured from the *start* pane.
+                    // For `body_paned` the start child is the sidebar; for
+                    // `center_right` the start child is the center, so the
+                    // handle position must be `paned width − right panel width`.
+                    let sidebar = sidebar_position(width);
+                    body_paned.set_position(sidebar);
+                    let right_panel = right_panel_position(width);
+                    let center_width = (width - sidebar).max(1);
+                    center_right.set_position((center_width - right_panel).max(240));
+                    glib::ControlFlow::Break
+                });
+            });
+        }
 
         let window = Rc::new(Self {
             app_window,
@@ -346,6 +388,11 @@ impl ChromiaWindow {
                 self.config.borrow().theme.catppuccin.flavor,
                 &self.config.borrow().theme.catppuccin.accent,
             ),
+            ThemeMode::Preset => {
+                // Fall back to the Catppuccin default palette for unknown names.
+                resolve_preset(&self.config.borrow().theme.preset)
+                    .unwrap_or_else(|| palette_for(Flavor::Mocha, "mauve"))
+            }
             ThemeMode::Custom => Palette::from_custom(&self.config.borrow().theme.custom),
         };
         *self.palette.borrow_mut() = resolved.clone();
@@ -366,17 +413,35 @@ impl ChromiaWindow {
         let appearance: AppearanceConfig = self.config.borrow().appearance.clone();
         let glass_on = appearance.glass && appearance.glass_mode != GlassMode::Disabled;
         let root = &self.root;
+        // The window itself also carries the glass classes so the stylesheet can
+        // clear its background and let the desktop show through the panels.
+        let window_widget: &gtk::Widget = self.app_window.upcast_ref();
 
         if glass_on {
             root.add_css_class("glass");
+            window_widget.add_css_class("glass");
         } else {
             root.remove_css_class("glass");
+            window_widget.remove_css_class("glass");
         }
 
         if glass_on && appearance.glass_mode == GlassMode::Strong {
             root.add_css_class("glass-strong");
+            window_widget.add_css_class("glass-strong");
         } else {
             root.remove_css_class("glass-strong");
+            window_widget.remove_css_class("glass-strong");
+        }
+
+        // Only translucent glass makes the window transparent; `Solid` glass is
+        // an opaque tint and must keep an opaque background.
+        let transparent_on = glass_on && appearance.glass_background != GlassBackground::Solid;
+        if transparent_on {
+            root.add_css_class("glass-transparent");
+            window_widget.add_css_class("glass-transparent");
+        } else {
+            root.remove_css_class("glass-transparent");
+            window_widget.remove_css_class("glass-transparent");
         }
 
         if appearance.animations {
@@ -399,6 +464,16 @@ impl ChromiaWindow {
             root.remove_css_class("noise");
         }
 
+        tracing::debug!(
+            glass_on,
+            transparent_on,
+            glass_mode = ?appearance.glass_mode,
+            glass_background = ?appearance.glass_background,
+            window_classes = ?self.app_window.css_classes(),
+            root_classes = ?root.css_classes(),
+            "applied appearance classes"
+        );
+
         if let Err(err) = css::apply_css(&css::appearance_css(&appearance)) {
             tracing::warn!(error = %err, "could not apply appearance css");
         }
@@ -414,5 +489,42 @@ pub(crate) fn resolve_initial_palette(theme: &ThemeConfig) -> Palette {
             palette_for(theme.catppuccin.flavor, &theme.catppuccin.accent)
         }
         ThemeMode::Catppuccin => palette_for(theme.catppuccin.flavor, &theme.catppuccin.accent),
+        ThemeMode::Preset => {
+            // Fall back to the Catppuccin default palette for unknown names.
+            resolve_preset(&theme.preset).unwrap_or_else(|| palette_for(Flavor::Mocha, "mauve"))
+        }
     }
+}
+
+/// Sidebar width as a fraction of the window width, clamped to a usable range
+/// so the sidebar stays comfortably wide on big screens but never swallows the
+/// center panel on small ones (e.g. 218px at 1280px, 220px at 1295px).
+fn sidebar_position(width: i32) -> i32 {
+    ((width as f64 * 0.17).round() as i32).clamp(200, 240)
+}
+
+/// Right-panel width as a fraction of the window width, clamped so the panel is
+/// sized to the screen at startup (e.g. 384px at 1280px, down from the old
+/// hardcoded 560px) instead of dominating the layout.
+fn right_panel_position(width: i32) -> i32 {
+    ((width as f64 * 0.30).round() as i32).clamp(300, 420)
+}
+
+/// Scales a requested default window size down to 90% of the primary monitor's
+/// work area when it would not fit the screen, floored at 800x600. Falls back
+/// to the requested size when no display is available (e.g. headless tests).
+fn fit_to_monitor(width: i32, height: i32) -> (i32, i32) {
+    let Some(monitor) = gdk::Display::default()
+        .and_then(|display| display.monitors().item(0))
+        .and_then(|item| item.downcast::<gdk::Monitor>().ok())
+    else {
+        return (width, height);
+    };
+    let area = monitor.geometry();
+    let max_w = (area.width() as f64 * 0.9).round() as i32;
+    let max_h = (area.height() as f64 * 0.9).round() as i32;
+    (
+        width.min(max_w.max(800)),
+        height.min(max_h.max(600)),
+    )
 }

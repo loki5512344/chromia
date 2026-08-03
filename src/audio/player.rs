@@ -213,6 +213,7 @@ impl Engine {
             return;
         }
         if track.path.as_os_str().is_empty() {
+            self.emit(PlayerEvent::Loading(track.title.clone()));
             let resolved = match track.source {
                 crate::library::SourceKind::Youtube => crate::sources::youtube::YoutubeSource::new(
                     &self.settings.quality,

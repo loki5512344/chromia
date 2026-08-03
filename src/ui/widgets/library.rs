@@ -1,9 +1,10 @@
 //! Searchable library list: local database plus online sources (YouTube,
 //! SoundCloud) resolved through yt-dlp.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use glib::clone;
 use gtk::prelude::*;
@@ -103,6 +104,8 @@ pub struct Library {
     youtube: YoutubeSource,
     soundcloud: SoundcloudSource,
     rt: tokio::runtime::Handle,
+    search_source: Rc<RefCell<Option<glib::SourceId>>>,
+    search_generation: Rc<Cell<u64>>,
 }
 
 impl Library {
@@ -183,6 +186,8 @@ impl Library {
             youtube,
             soundcloud,
             rt: ctx.rt.clone(),
+            search_source: Rc::new(RefCell::new(None)),
+            search_generation: Rc::new(Cell::new(0)),
         };
         widget.initial_load(ctx);
         widget.wire(&ctx.database);
@@ -212,8 +217,13 @@ impl Library {
         }
     }
 
-    /// Wires the source selector and search entry to reload the list.
+    /// Wires the source selector and search entry to reload the list. Search
+    /// changes are debounced so that typing does not spawn a yt-dlp process
+    /// per keystroke.
     fn wire(&self, database: &Arc<crate::library::database::Database>) {
+        let search_source = self.search_source.clone();
+        let search_generation = self.search_generation.clone();
+
         let search_changed = {
             let database = database.clone();
             let search = self.search.clone();
@@ -225,8 +235,10 @@ impl Library {
             let youtube = self.youtube.clone();
             let soundcloud = self.soundcloud.clone();
             let rt = self.rt.clone();
+            let search_source = search_source.clone();
+            let search_generation = search_generation.clone();
             move |_entry: &gtk::SearchEntry| {
-                reload(
+                schedule_reload(
                     &database,
                     &search,
                     &dropdown,
@@ -237,6 +249,8 @@ impl Library {
                     &youtube,
                     &soundcloud,
                     &rt,
+                    &search_source,
+                    &search_generation,
                 );
             }
         };
@@ -253,6 +267,7 @@ impl Library {
             let youtube = self.youtube.clone();
             let soundcloud = self.soundcloud.clone();
             let rt = self.rt.clone();
+            let search_generation = search_generation.clone();
             move |_dropdown: &gtk::DropDown| {
                 reload(
                     &database,
@@ -265,11 +280,70 @@ impl Library {
                     &youtube,
                     &soundcloud,
                     &rt,
+                    &search_generation,
                 );
             }
         };
         self.dropdown.connect_selected_notify(selected);
     }
+}
+
+/// Delay between a search keystroke and the actual reload, letting a burst of
+/// keystrokes coalesce into a single query.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(400);
+
+/// Cancels any pending reload and schedules a fresh one after
+/// [`SEARCH_DEBOUNCE`], so online sources are only queried once the user
+/// pauses typing.
+#[allow(clippy::too_many_arguments)]
+fn schedule_reload(
+    database: &Arc<crate::library::database::Database>,
+    search: &gtk::SearchEntry,
+    dropdown: &gtk::DropDown,
+    modes: &Rc<Vec<SourceKind>>,
+    list: &gtk::ListBox,
+    tracks: &Rc<RefCell<Vec<Track>>>,
+    tx: &tokio::sync::mpsc::Sender<PlayerCommand>,
+    youtube: &YoutubeSource,
+    soundcloud: &SoundcloudSource,
+    rt: &tokio::runtime::Handle,
+    search_source: &Rc<RefCell<Option<glib::SourceId>>>,
+    search_generation: &Rc<Cell<u64>>,
+) {
+    if let Some(source) = search_source.borrow_mut().take() {
+        source.remove();
+    }
+    let database = database.clone();
+    let search = search.clone();
+    let dropdown = dropdown.clone();
+    let modes = modes.clone();
+    let list = list.clone();
+    let tracks = tracks.clone();
+    let tx = tx.clone();
+    let youtube = youtube.clone();
+    let soundcloud = soundcloud.clone();
+    let rt = rt.clone();
+    let search_source = search_source.clone();
+    let search_generation = search_generation.clone();
+    let done_source = search_source.clone();
+    let source = glib::timeout_add_local(SEARCH_DEBOUNCE, move || {
+        *search_source.borrow_mut() = None;
+        reload(
+            &database,
+            &search,
+            &dropdown,
+            &modes,
+            &list,
+            &tracks,
+            &tx,
+            &youtube,
+            &soundcloud,
+            &rt,
+            &search_generation,
+        );
+        glib::ControlFlow::Break
+    });
+    *done_source.borrow_mut() = Some(source);
 }
 
 /// Runs the current query against the selected source.
@@ -285,6 +359,7 @@ fn reload(
     youtube: &YoutubeSource,
     soundcloud: &SoundcloudSource,
     rt: &tokio::runtime::Handle,
+    generation: &Rc<Cell<u64>>,
 ) {
     let query = search.text().to_string();
     let mode = modes
@@ -317,12 +392,15 @@ fn reload(
             let tracks = tracks.clone();
             let tx = tx.clone();
             let rt = rt.clone();
+            let generation = generation.clone();
             glib::MainContext::default().spawn_local(async move {
                 if query.is_empty() {
                     *tracks.borrow_mut() = Vec::new();
                     populate(&list, &tracks, &tx);
                     return;
                 }
+                let started = generation.get() + 1;
+                generation.set(started);
                 let handle = rt.spawn(async move { online.search(&query).await });
                 let results = match handle.await {
                     Ok(Ok(tracks)) => tracks,
@@ -335,6 +413,9 @@ fn reload(
                         return;
                     }
                 };
+                if generation.get() != started {
+                    return;
+                }
                 *tracks.borrow_mut() = results.clone();
                 populate(&list, &tracks, &tx);
             });

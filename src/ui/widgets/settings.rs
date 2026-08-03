@@ -7,7 +7,7 @@
 //! 3. **Sources** - local music path, YouTube quality
 //! 4. **Integrations** - MPRIS2, Discord Rich Presence
 #![allow(deprecated)] // ComboBoxText is deprecated since GTK 4.10 but is the
-// most compact dropdown API for small option lists.
+                      // most compact dropdown API for small option lists.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,6 +16,7 @@ use gtk::prelude::*;
 
 use crate::audio::{PlayerCommand, PlayerEvent};
 use crate::config::schema::{Config, Flavor, ThemeMode};
+use crate::theme::{ThemePreset, ALL_THEME_PRESETS};
 use crate::ui::UiContext;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -181,6 +182,7 @@ impl Settings {
             match cfg.theme.mode {
                 ThemeMode::Dynamic => "dynamic",
                 ThemeMode::Catppuccin => "catppuccin",
+                ThemeMode::Preset => "preset",
                 ThemeMode::Custom => "custom",
             }
         };
@@ -188,6 +190,7 @@ impl Settings {
             &[
                 ("dynamic", "Dynamic (album art)"),
                 ("catppuccin", "Catppuccin"),
+                ("preset", "Preset"),
                 ("custom", "Custom"),
             ],
             theme_mode,
@@ -199,6 +202,7 @@ impl Settings {
                 let mode = match cb.active_id().as_deref() {
                     Some("dynamic") => ThemeMode::Dynamic,
                     Some("catppuccin") => ThemeMode::Catppuccin,
+                    Some("preset") => ThemeMode::Preset,
                     Some("custom") => ThemeMode::Custom,
                     _ => return,
                 };
@@ -277,6 +281,25 @@ impl Settings {
             });
         }
         content.append(&setting_row("Catppuccin accent", &accent_combo));
+
+        let preset_id = config.borrow().theme.preset.clone();
+        let preset_items: Vec<(&str, &str)> = ALL_THEME_PRESETS
+            .iter()
+            .map(|preset: &ThemePreset| (preset.name, preset.name))
+            .collect();
+        let preset_combo = combo(&preset_items, &preset_id);
+        {
+            let config = config.clone();
+            let apply_theme = apply_theme.clone();
+            preset_combo.connect_changed(move |cb| {
+                if let Some(id) = cb.active_id() {
+                    config.borrow_mut().theme.preset = id.to_string();
+                    Self::save_config(&config);
+                    apply_theme();
+                }
+            });
+        }
+        content.append(&setting_row("Theme preset", &preset_combo));
 
         // ── Custom palette (effective in `custom` mode) ────────────────────
         content.append(&section_header("Custom palette"));

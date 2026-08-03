@@ -21,6 +21,13 @@
 //!   [`SlotWidget::all`] catalogue.
 //! - Reordering via drag-and-drop and palette additions are persisted back to
 //!   `config.layout.right_panel.slots`, so layout survives a restart.
+//!
+//! **Persistent slot containers:** each implemented slot owns a [`SlotContainer`]
+//! whose `wrapper` is created once. The hosted widget is appended to its
+//! wrapper exactly once and never re-parented; `rebuild` only re-appends the
+//! (distinct) wrappers inside the persistent `content` box and toggles the
+//! edit-mode headers. This avoids the `gtk_box_append` parent assertion that
+//! rebuilding freshly-constructed wrappers around live singletons produced.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -31,14 +38,14 @@ use gtk::prelude::*;
 
 use crate::audio::PlayerEvent;
 use crate::config::schema::{AppearanceConfig, Config};
-use crate::ui::UiContext;
-use crate::ui::layout::slots::{SlotWidget, default_slots, parse_slots};
+use crate::ui::layout::slots::{default_slots, parse_slots, SlotWidget};
 use crate::ui::widgets::album_art::AlbumArt;
 use crate::ui::widgets::audio_info::AudioInfo;
 use crate::ui::widgets::equalizer::EqualizerWidget;
 use crate::ui::widgets::lyrics::Lyrics;
 use crate::ui::widgets::queue::Queue as QueueWidget;
 use crate::ui::widgets::visualizer::Visualizer;
+use crate::ui::UiContext;
 
 /// String payload shipped through the drag-and-drop channel.
 type SlotPayload = String;
@@ -47,7 +54,14 @@ type SlotPayload = String;
 /// trigger a rebuild without owning `RightPanel` itself.
 struct SharedState {
     root: gtk::Box,
+    /// Persistent container holding the slot wrappers. The transient rows
+    /// (edit toggle / palette) are appended after it and rebuilt on demand,
+    /// so `rebuild` never has to touch `root`'s persistent children.
+    content: gtk::Box,
     slots: RefCell<Vec<SlotWidget>>,
+    /// One container per implemented slot, built once in `new` (and on demand
+    /// for palette additions). The hosted widget never changes parent.
+    containers: RefCell<Vec<SlotContainer>>,
     edit_mode: RefCell<bool>,
     config: Rc<RefCell<Config>>,
     album_art: AlbumArt,
@@ -56,6 +70,22 @@ struct SharedState {
     equalizer: EqualizerWidget,
     audio_info: AudioInfo,
     visualizer: Visualizer,
+}
+
+/// A right-panel slot's persistent wrapper.
+///
+/// The `header` (drag handle + title) is hidden in normal mode and shown in
+/// edit mode; the `widget` is appended to `wrapper` exactly once and never
+/// re-parented, which keeps the panel safe to rebuild repeatedly.
+#[derive(Clone)]
+struct SlotContainer {
+    slot: SlotWidget,
+    wrapper: gtk::Box,
+    header: gtk::Box,
+    /// The hosted widget root, kept as a reference handle so the container
+    /// owns its lifetime without ever re-parenting it.
+    #[allow(dead_code)]
+    widget: gtk::Widget,
 }
 
 /// The right-panel container hosting the customizable vertical slot stack.
@@ -76,15 +106,24 @@ impl RightPanel {
             configured
         };
 
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(vec!["chromia-right-panel"])
+            .spacing(0)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(0)
+            .build();
+        root.append(&content);
+
         let state = Rc::new(SharedState {
-            root: gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .css_classes(vec!["chromia-right-panel"])
-                .spacing(0)
-                .hexpand(true)
-                .vexpand(true)
-                .build(),
+            root,
+            content,
             slots: RefCell::new(slots),
+            containers: RefCell::new(Vec::new()),
             edit_mode: RefCell::new(ctx.config.borrow().appearance.edit_mode),
             config: ctx.config.clone(),
             album_art: AlbumArt::new(ctx),
@@ -94,6 +133,13 @@ impl RightPanel {
             audio_info: AudioInfo::new(ctx),
             visualizer: Visualizer::new(ctx),
         });
+
+        // Build one persistent container per implemented slot, in the
+        // configured order. Unimplemented slots are skipped just like the
+        // original rebuild did.
+        for slot in state.slots.borrow().iter().copied() {
+            ensure_container(&state, slot);
+        }
 
         rebuild(&state);
 
@@ -117,6 +163,7 @@ impl RightPanel {
     #[allow(dead_code)]
     pub fn set_slots(&self, slots: Vec<SlotWidget>) {
         *self.state.slots.borrow_mut() = slots;
+        sync_container_order(&self.state);
         persist_slots(&self.state);
         rebuild(&self.state);
     }
@@ -155,14 +202,83 @@ impl RightPanel {
     }
 }
 
-/// Clears the panel and re-appends every slot in the current order.
+/// Returns the root widget for a slot, or `None` when the widget is not yet
+/// implemented. Mirrors the match the original rebuild performed inline.
+fn slot_root(state: &SharedState, slot: SlotWidget) -> Option<gtk::Widget> {
+    match slot {
+        SlotWidget::AlbumArt => Some(state.album_art.root().upcast()),
+        SlotWidget::Lyrics => Some(state.lyrics.root().upcast()),
+        SlotWidget::Queue => Some(state.queue.root().upcast()),
+        SlotWidget::Equalizer => Some(state.equalizer.root().upcast()),
+        SlotWidget::Visualizer => Some(state.visualizer.root().upcast()),
+        // Future slots fall through silently — see CHROMIA.md roadmap.
+        _ => None,
+    }
+}
+
+/// Ensures a slot has a persistent [`SlotContainer`], building one on demand
+/// (e.g. for palette additions). Unimplemented slots get no container.
+fn ensure_container(state: &Rc<SharedState>, slot: SlotWidget) {
+    {
+        let containers = state.containers.borrow();
+        if containers.iter().any(|c| c.slot == slot) {
+            return;
+        }
+    }
+
+    let Some(widget) = slot_root(state, slot) else {
+        return;
+    };
+
+    let wrapper = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(vec!["chromia-slot"])
+        .build();
+    let header = build_slot_header(slot);
+    // Headers only matter in edit mode; keep them hidden until then so the
+    // normal panel renders exactly as before.
+    header.set_visible(*state.edit_mode.borrow());
+    wrapper.append(&header);
+    wrapper.append(&widget);
+
+    // Wire drag-and-drop once for the lifetime of the container. The
+    // handlers themselves check `edit_mode`, so nothing is draggable or
+    // droppable in normal mode.
+    wire_drag_source(&wrapper, slot, state.clone());
+    wire_drop_target(&wrapper, slot, state.clone());
+
+    state.containers.borrow_mut().push(SlotContainer {
+        slot,
+        wrapper,
+        header,
+        widget,
+    });
+}
+
+/// Rebuilds the panel's transient rows and re-orders the slot wrappers.
 ///
-/// Slots that are not yet implemented (`Visualizer`, `AudioInfo`, etc.)
-/// are skipped — the panel keeps rendering the ones that have a builder
-/// today, so the right panel is always usable.
+/// Slot wrappers are re-parented inside the persistent `content` box, but the
+/// hosted widget instances never leave their wrapper. Toggling edit mode on
+/// and off repeatedly therefore never hits the `gtk_box_append: assertion
+/// 'gtk_widget_get_parent (child) == NULL'` failure the old per-rebuild
+/// wrapper construction produced.
 fn rebuild(state: &Rc<SharedState>) {
-    while let Some(child) = state.root.first_child() {
-        state.root.remove(&child);
+    // Remove only the transient rows from `root`; the persistent `content`
+    // box (its first child) is kept so the wrappers inside it keep their
+    // parentage.
+    let content_widget = state.content.clone().upcast::<gtk::Widget>();
+    let mut transient: Vec<gtk::Widget> = Vec::new();
+    {
+        let mut child = state.root.first_child();
+        while let Some(c) = child {
+            if c != content_widget {
+                transient.push(c.clone());
+            }
+            child = c.next_sibling();
+        }
+    }
+    for widget in transient {
+        state.root.remove(&widget);
     }
 
     // Edit-mode toggle button — always visible at the top of the right panel
@@ -197,44 +313,29 @@ fn rebuild(state: &Rc<SharedState>) {
         state.root.append(&toggle_row);
     }
 
+    let edit_mode = *state.edit_mode.borrow();
+
     // Layout-editor palette — only in edit mode. Offers the full widget
     // catalogue so the user can append any slot, not just reorder the ones
     // that exist by default.
-    if *state.edit_mode.borrow() {
+    if edit_mode {
         state.root.append(&palette_row(state));
     }
 
+    // Re-append the slot wrappers into `content` in the current order.
+    // Moving a wrapper is safe: each wrapper is a distinct box whose inner
+    // widget never gets re-parented.
+    let content = &state.content;
+    while let Some(child) = content.first_child() {
+        content.remove(&child);
+    }
     let slots = state.slots.borrow().clone();
-    let edit_mode = *state.edit_mode.borrow();
+    let containers = state.containers.borrow();
     for slot in slots {
-        let widget = match slot {
-            SlotWidget::AlbumArt => state.album_art.root(),
-            SlotWidget::Lyrics => state.lyrics.root(),
-            SlotWidget::Queue => state.queue.root(),
-            SlotWidget::Equalizer => state.equalizer.root(),
-            SlotWidget::Visualizer => state.visualizer.root(),
-            // Future slots fall through silently — see CHROMIA.md roadmap.
-            _ => continue,
-        };
-
-        let wrapper = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(vec!["chromia-slot"])
-            .build();
-
-        if edit_mode {
-            let header = build_slot_header(slot);
-            wrapper.append(&header);
+        if let Some(container) = containers.iter().find(|c| c.slot == slot) {
+            container.header.set_visible(edit_mode);
+            content.append(&container.wrapper);
         }
-        wrapper.append(&widget);
-
-        // Wire drag-and-drop in edit mode only.
-        if edit_mode {
-            wire_drag_source(&wrapper, slot);
-            wire_drop_target(&wrapper, slot, state.clone());
-        }
-
-        state.root.append(&wrapper);
     }
 }
 
@@ -273,6 +374,8 @@ fn palette_row(state: &Rc<SharedState>) -> gtk::Box {
                 slots.push(widget);
             }
         }
+        // Build the container on demand for newly added implemented slots.
+        ensure_container(&state_for_add, widget);
         persist_slots(&state_for_add);
         rebuild(&state_for_add);
     });
@@ -291,6 +394,36 @@ fn palette_row(state: &Rc<SharedState>) -> gtk::Box {
 /// A stable catalogue snapshot order matching [`SlotWidget::all`].
 fn dynamic_catalogue() -> Vec<SlotWidget> {
     SlotWidget::all().to_vec()
+}
+
+/// Reorders the slot list after a drop, mirroring the container list so
+/// `rebuild` renders both in the same sequence.
+fn reorder_slots(state: &Rc<SharedState>, dragged: SlotWidget, target: SlotWidget) {
+    {
+        let mut slots = state.slots.borrow_mut();
+        if let Some(pos) = slots.iter().position(|s| *s == dragged) {
+            slots.remove(pos);
+        }
+        let target_index = slots
+            .iter()
+            .position(|s| *s == target)
+            .unwrap_or(slots.len());
+        slots.insert(target_index, dragged);
+    }
+    sync_container_order(state);
+}
+
+/// Rebuilds `containers` to match the current `slots` order, keeping each
+/// container's widgets (and their parentage) untouched.
+fn sync_container_order(state: &Rc<SharedState>) {
+    let mut pool = state.containers.borrow().clone();
+    let mut ordered = Vec::with_capacity(pool.len());
+    for slot in state.slots.borrow().iter() {
+        if let Some(pos) = pool.iter().position(|c| &c.slot == slot) {
+            ordered.push(pool.remove(pos));
+        }
+    }
+    *state.containers.borrow_mut() = ordered;
 }
 
 /// Persists the current slot order into `config.layout.right_panel.slots`.
@@ -341,13 +474,23 @@ fn slot_content_provider(slot: SlotWidget) -> ContentProvider {
 }
 
 /// Attaches a `DragSource` to a slot wrapper so the user can pick it up.
-fn wire_drag_source(wrapper: &gtk::Box, slot: SlotWidget) {
+///
+/// The source is attached once; `connect_prepare` refuses to start a drag
+/// unless the panel is in edit mode.
+fn wire_drag_source(wrapper: &gtk::Box, slot: SlotWidget, state: Rc<SharedState>) {
     let source = gtk::DragSource::builder()
         .name("chromia-slot-drag")
         .actions(gtk::gdk::DragAction::MOVE)
         .build();
     let provider = slot_content_provider(slot);
-    source.connect_prepare(move |_, _, _| Some(provider.clone()));
+    let state_for_prepare = state.clone();
+    source.connect_prepare(move |_, _, _| {
+        if *state_for_prepare.edit_mode.borrow() {
+            Some(provider.clone())
+        } else {
+            None
+        }
+    });
 
     let wrapper_clone = wrapper.clone();
     source.connect_drag_begin(clone!(
@@ -371,10 +514,17 @@ fn wire_drag_source(wrapper: &gtk::Box, slot: SlotWidget) {
 /// Attaches a `DropTarget` to a slot wrapper so the user can drop another
 /// slot onto it. On drop, the slots vector is reordered and the panel is
 /// rebuilt on the next idle tick.
+///
+/// The target is attached once; it only reacts while the panel is in edit
+/// mode.
 fn wire_drop_target(wrapper: &gtk::Box, slot: SlotWidget, state: Rc<SharedState>) {
     let target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
     let wrapper_clone = wrapper.clone();
+    let state_for_enter = state.clone();
     target.connect_enter(move |_, _, _| {
+        if !*state_for_enter.edit_mode.borrow() {
+            return gtk::gdk::DragAction::empty();
+        }
         wrapper_clone.add_css_class("drop-target");
         gtk::gdk::DragAction::MOVE
     });
@@ -387,29 +537,20 @@ fn wire_drop_target(wrapper: &gtk::Box, slot: SlotWidget, state: Rc<SharedState>
         }
     ));
     target.connect_drop(move |_, value, _, _| {
+        if !*state.edit_mode.borrow() {
+            return false;
+        }
         let Some(name) = value.get::<SlotPayload>().ok() else {
             return false;
         };
         let Some(dragged) = SlotWidget::from_str(&name) else {
             return false;
         };
-        // Reorder: remove dragged from old position, insert before the
-        // target slot.
-        {
-            let mut current = state.slots.borrow_mut();
-            if let Some(pos) = current.iter().position(|s| *s == dragged) {
-                current.remove(pos);
-            }
-            let target_index = current
-                .iter()
-                .position(|s| *s == slot)
-                .unwrap_or(current.len());
-            current.insert(target_index, dragged);
-        }
+        // Reorder both the slot list and the container list, then rebuild.
+        reorder_slots(&state, dragged, slot);
         persist_slots(&state);
-        // Schedule the rebuild for the next idle tick so the current
-        // event dispatch finishes before we destroy the wrapper that owns
-        // this DropTarget.
+        // Schedule the rebuild for the next idle tick so the current event
+        // dispatch finishes before the wrappers are re-parented.
         let state = state.clone();
         glib::idle_add_local_once(move || {
             rebuild(&state);

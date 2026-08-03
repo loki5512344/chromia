@@ -1,16 +1,19 @@
 //! Theme resolution: palette selection and GTK CSS generation.
 //!
-//! Three modes exist (see [`crate::config::schema::ThemeMode`]):
+//! Four modes exist (see [`crate::config::schema::ThemeMode`]):
 //! * `dynamic` — colors extracted from album art via color-thief,
 //! * `catppuccin` — static Catppuccin palette,
+//! * `preset` — a ready-made palette from the bundled [`presets`] catalog,
 //! * `custom` — user-supplied hex colors.
 
 pub mod catppuccin;
 pub mod css;
 pub mod dynamic;
+pub mod presets;
 
 pub use catppuccin::palette_for;
 pub use dynamic::palette_from_image;
+pub use presets::{resolve as resolve_preset, ThemePreset, ALL as ALL_THEME_PRESETS};
 
 /// A resolved color palette; every color is a hex string like `#1e1e2e`.
 #[derive(Debug, Clone, PartialEq, Eq)]

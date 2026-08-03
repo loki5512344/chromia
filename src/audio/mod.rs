@@ -99,6 +99,9 @@ pub enum PlayerEvent {
     CurrentIndexChanged(Option<usize>),
     /// The current track finished and the queue advanced.
     TrackEnded,
+    /// A remote track is being resolved before playback begins; the payload is
+    /// the track title being loaded.
+    Loading(String),
     /// A non-fatal error occurred (e.g. decode failure).
     Error(String),
 }

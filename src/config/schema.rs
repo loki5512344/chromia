@@ -64,6 +64,8 @@ pub struct ThemeConfig {
     pub blur_strength: u8,
     /// Catppuccin flavor settings (used in `catppuccin` and as fallback).
     pub catppuccin: CatppuccinConfig,
+    /// Ready-made preset name (used in `preset` mode).
+    pub preset: String,
     /// User-defined palette (used in `custom` mode).
     pub custom: CustomThemeConfig,
 }
@@ -76,6 +78,7 @@ impl Default for ThemeConfig {
             blur_background: true,
             blur_strength: 20,
             catppuccin: CatppuccinConfig::default(),
+            preset: "Midnight".into(),
             custom: CustomThemeConfig::default(),
         }
     }
@@ -89,6 +92,8 @@ pub enum ThemeMode {
     Dynamic,
     /// Static Catppuccin palette.
     Catppuccin,
+    /// Ready-made preset palette from `theme.preset`.
+    Preset,
     /// User-supplied colors from `theme.custom`.
     Custom,
 }
